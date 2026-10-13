@@ -32,6 +32,10 @@ struct WriterFileActions {
     var save: () -> Void
     var saveAs: () -> Void
     var exportPDF: () -> Void
+    var find: () -> Void = {}
+    var findNext: () -> Void = {}
+    var findPrevious: () -> Void = {}
+    var toggleBookmark: () -> Void = {}
 }
 
 private struct WriterFileActionsKey: FocusedValueKey {
@@ -50,6 +54,18 @@ struct WriterFileCommands: Commands {
     @ObservedObject private var recentFiles = RecentMarkdownFiles.shared
 
     var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Button("Toggle Bookmark") { actions?.toggleBookmark() }
+                .keyboardShortcut("d").disabled(actions == nil)
+            Menu("Find") {
+                Button("Find…") { actions?.find() }
+                    .keyboardShortcut("f").disabled(actions == nil)
+                Button("Find Next") { actions?.findNext() }
+                    .keyboardShortcut("g").disabled(actions == nil)
+                Button("Find Previous") { actions?.findPrevious() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift]).disabled(actions == nil)
+            }
+        }
         CommandGroup(replacing: .newItem) {
             Button("New") { actions?.new() }
                 .disabled(actions == nil)

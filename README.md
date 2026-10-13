@@ -13,7 +13,7 @@ A focused, native macOS Markdown editor with A4 pages, live preview, notes, and 
 ## Download and install
 
 1. Open the [Releases page](https://github.com/chronis10/clean_writer/releases).
-2. Download `Clean-Writer-1.0.0-macOS-universal.dmg` or the equivalent ZIP from **Assets**. GitHub's “Source code” archives are the project source, not the ready-to-run app.
+2. Download `Clean-Writer-1.1.0-macOS-universal.dmg` or the equivalent ZIP from **Assets**. GitHub's “Source code” archives are the project source, not the ready-to-run app.
 3. Open the DMG and drag **Clean Writer.app** into **Applications**, or extract the ZIP and move the app there.
 4. Open Clean Writer from Applications.
 
@@ -34,9 +34,11 @@ The universal app contains `arm64` and `x86_64` binaries. Apple Silicon has been
 
 ## Features
 
-- **A4 writing canvas:** document fonts and margins use print points, with automatic pagination and manual “Add page” breaks.
+- **A4 writing canvas:** document fonts and margins use print points, with automatic pagination and manual “Add page” breaks. Arrow keys move the cursor between pages.
 - **Markdown source and preview:** switch with the eye button; preview keeps headings, line breaks, lists, tables, and inline formatting readable.
 - **Notes and todos:** blue note callouts, amber todo callouts, and small reminders in the page thumbnails.
+- **Resume and bookmarks:** reopen each file at its last cursor position. Use ⌘D to bookmark the current page at the cursor, or remove its bookmark from any row on that page; bookmarked page previews show a small symbol at the top-left. Click the preview to jump there, or right-click its bookmark symbol for individual jump/remove options. Bookmarks follow edits. The saved cursor and bookmarks are stored locally per file; they are not added to the Markdown text. Renaming/moving a file or editing it externally may affect restoration.
+- **Find:** search the complete Markdown source with ⌘F, highlighted matches, a match count, next/previous navigation with wraparound, and optional case matching. Find switches to source mode; Escape closes the search field and returns to the match.
 - **File handling:** New, Open, Open Recent (10 files), Save, Save As, and Export PDF in the File menu.
 - **Auto-save:** named Markdown files save after a one-second typing pause, and pending changes save when you switch away, close, or quit. Untitled drafts are recovered locally until you choose a file location.
 - **Native spelling assistance:** macOS spell checking, suggestions, and automatic spelling correction in source mode.
@@ -51,6 +53,10 @@ The universal app contains `arm64` and `x86_64` binaries. Apple Silicon has been
 
 | Action | Shortcut |
 | --- | --- |
+| Add / remove bookmark | ⌘D |
+| Find | ⌘F |
+| Next / previous match | ⌘G / ⇧⌘G |
+| Close Find (in its search field) | Escape |
 | New document | ⌘N |
 | Open | ⌘O |
 | Save | ⌘S |
@@ -131,11 +137,11 @@ print(title)
 
 ## Files, privacy, and current limits
 
-Clean Writer writes UTF-8 `.md` files. Draft recovery, saved-file access bookmarks, and recent-file history are stored locally in macOS preferences. There is no account, analytics service, or cloud backend in the app. Clicking a Markdown link opens that destination in your browser.
+Clean Writer writes UTF-8 `.md` files. Draft recovery, cursor positions, document bookmarks, saved-file access permissions, and recent-file history are stored locally in macOS preferences. There is no account, analytics service, or cloud backend in the app. Clicking a Markdown link opens that destination in your browser.
 
 Manual page breaks use the form-feed character (`U+000C`) in the saved Markdown source. Other editors may display or ignore it. Automatic page boundaries in source mode measure source text; formatted preview and PDF can wrap differently, so the exported PDF page count may differ from the editor's count.
 
-The editor uses separate text views for each source page. Typing overflow transfers the caret automatically, but selecting or editing text across multiple pages is not a continuous single-text-view selection. Markdown is parsed per visible source page in preview, so a Markdown block split by a source page boundary can lose context there; PDF export renders each manually separated document section before pagination.
+The editor uses separate text views for each source page. Typing overflow and arrow-key movement transfer the caret between pages automatically, but selecting or editing text across multiple pages is not a continuous single-text-view selection. Markdown is parsed per visible source page in preview, so a Markdown block split by a source page boundary can lose context there; PDF export renders each manually separated document section before pagination.
 
 Images currently display their alt text rather than embedding the image. HTML rendering, syntax highlighting, mathematical formulas, footnotes, and automatic application updates are not provided. Updates can be downloaded from GitHub Releases.
 

@@ -20,6 +20,15 @@ private struct EditorFocusRequest {
     let id = UUID()
     let pageIndex: Int
     let selection: NSRange
+    var takeFocus = true
+    var verticalX: CGFloat? = nil
+    var enterFromTop = true
+}
+
+private struct CaretScrollTarget {
+    let id = UUID()
+    let pageIndex: Int
+    let y: CGFloat
 }
 
 private enum PageLayout {
@@ -112,7 +121,10 @@ private struct PageTextEditor: NSViewRepresentable {
     var font: NSFont
     var foreground: NSColor
     var focusRequest: EditorFocusRequest? = nil
-    var onFocusApplied: (UUID) -> Void = { _ in }
+    var searchHighlights: [NSRange] = []
+    var onFocusApplied: (UUID, CGFloat) -> Void = { _, _ in }
+    var onNavigate: (Bool, CGFloat?) -> Bool = { _, _ in false }
+    var onSelection: (NSRange) -> Void = { _ in }
     var onEdit: (String, NSRange, Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onEdit: onEdit) }
@@ -132,6 +144,8 @@ private struct PageTextEditor: NSViewRepresentable {
         view.isVerticallyResizable = false
         view.isHorizontallyResizable = false
         view.autoresizingMask = [.width]
+        context.coordinator.onNavigate = onNavigate
+        context.coordinator.onSelection = onSelection
         view.delegate = context.coordinator
         view.font = font
         view.textColor = foreground
@@ -141,6 +155,8 @@ private struct PageTextEditor: NSViewRepresentable {
 
     func updateNSView(_ view: NSTextView, context: Context) {
         context.coordinator.onEdit = onEdit
+        context.coordinator.onNavigate = onNavigate
+        context.coordinator.onSelection = onSelection
         context.coordinator.onFocusApplied = onFocusApplied
         context.coordinator.currentFocusID = focusRequest?.id
         view.font = font
@@ -153,12 +169,23 @@ private struct PageTextEditor: NSViewRepresentable {
             view.setSelectedRange(NSRange(location: min(oldSelection.location, (text as NSString).length), length: 0))
             context.coordinator.updating = false
         }
+        if let manager = view.layoutManager {
+            let full = NSRange(location: 0, length: (view.string as NSString).length)
+            manager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
+            for range in searchHighlights where NSMaxRange(range) <= full.length {
+                manager.addTemporaryAttribute(.backgroundColor,
+                                              value: NSColor.systemYellow.withAlphaComponent(0.35),
+                                              forCharacterRange: range)
+            }
+        }
         if let focusRequest { context.coordinator.applyFocus(focusRequest, to: view) }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var onEdit: (String, NSRange, Bool) -> Void
-        var onFocusApplied: (UUID) -> Void = { _ in }
+        var onNavigate: (Bool, CGFloat?) -> Bool = { _, _ in false }
+        var onSelection: (NSRange) -> Void = { _ in }
+        var onFocusApplied: (UUID, CGFloat) -> Void = { _, _ in }
         var currentFocusID: UUID?
         private var queuedFocusID: UUID?
         private var appliedFocusID: UUID?
@@ -174,17 +201,81 @@ private struct PageTextEditor: NSViewRepresentable {
                 self.queuedFocusID = nil
                 guard self.currentFocusID == request.id, let view, let window = view.window else { return }
                 self.updating = true
-                window.makeFirstResponder(view)
+                if request.takeFocus { window.makeFirstResponder(view) }
                 let length = (view.string as NSString).length
                 let location = min(request.selection.location, length)
-                view.setSelectedRange(NSRange(location: location,
-                                              length: min(request.selection.length, length - location)))
+                var selection = NSRange(location: location,
+                                        length: min(request.selection.length, length - location))
+                if let x = request.verticalX, let manager = view.layoutManager,
+                   let container = view.textContainer {
+                    manager.ensureLayout(for: container)
+                    let line: NSRect
+                    if !request.enterFromTop, manager.extraLineFragmentTextContainer != nil {
+                        line = manager.extraLineFragmentRect
+                    } else if manager.numberOfGlyphs > 0 {
+                        line = manager.lineFragmentRect(forGlyphAt: request.enterFromTop ? 0 : manager.numberOfGlyphs - 1,
+                                                        effectiveRange: nil)
+                    } else {
+                        line = NSRect(x: 0, y: 0, width: container.size.width, height: view.font?.pointSize ?? 15)
+                    }
+                    let origin = view.textContainerOrigin
+                    let point = NSPoint(x: x + origin.x, y: line.midY + origin.y)
+                    selection = NSRange(location: min(length, view.characterIndexForInsertion(at: point)), length: 0)
+                }
+                view.setSelectedRange(selection)
                 view.scrollRangeToVisible(view.selectedRange())
                 self.updating = false
                 self.appliedFocusID = request.id
-                self.onFocusApplied(request.id)
+                self.onSelection(selection)
+                let screenRect = view.firstRect(forCharacterRange: NSRange(location: selection.location, length: 0), actualRange: nil)
+                let caretRect = view.convert(window.convertFromScreen(screenRect), from: nil)
+                self.onFocusApplied(request.id, caretRect.midY)
             }
         }
+        func textView(_ view: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard !updating, !view.hasMarkedText(), view.selectedRange().length == 0 else { return false }
+            let location = view.selectedRange().location
+            let length = (view.string as NSString).length
+            switch NSStringFromSelector(selector) {
+            case "moveRight:", "moveForward:":
+                return location == length && onNavigate(true, nil)
+            case "moveLeft:", "moveBackward:":
+                return location == 0 && onNavigate(false, nil)
+            case "moveDown:", "moveUp:":
+                guard let manager = view.layoutManager, let container = view.textContainer else { return false }
+                manager.ensureLayout(for: container)
+                let forward = NSStringFromSelector(selector) == "moveDown:"
+                guard manager.numberOfGlyphs > 0 else { return onNavigate(forward, 0) }
+                let hasExtraLine = manager.extraLineFragmentTextContainer != nil
+                let caretLine: NSRect
+                if location == length && hasExtraLine {
+                    caretLine = manager.extraLineFragmentRect
+                } else if manager.numberOfGlyphs > 0 {
+                    let glyph = manager.glyphIndexForCharacter(at: min(location, max(0, length - 1)))
+                    caretLine = manager.lineFragmentRect(forGlyphAt: min(glyph, manager.numberOfGlyphs - 1), effectiveRange: nil)
+                } else {
+                    return onNavigate(forward, 0)
+                }
+                let edgeLine = forward && hasExtraLine ? manager.extraLineFragmentRect :
+                    manager.lineFragmentRect(forGlyphAt: forward ? manager.numberOfGlyphs - 1 : 0, effectiveRange: nil)
+                guard abs(caretLine.minY - edgeLine.minY) < 0.5 else { return false }
+                // NSTextView supplies the insertion rectangle in screen coordinates.
+                // Convert it back to text-container points to keep the horizontal column.
+                guard let window = view.window else { return false }
+                let screenRect = view.firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)
+                let localRect = view.convert(window.convertFromScreen(screenRect), from: nil)
+                return onNavigate(forward, max(0, localRect.minX - view.textContainerOrigin.x))
+            default:
+                return false
+            }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !updating, let view = notification.object as? NSTextView,
+                  view.window?.firstResponder === view, !view.hasMarkedText() else { return }
+            onSelection(view.selectedRange())
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !updating, let textView = notification.object as? NSTextView else { return }
             onEdit(textView.string, textView.selectedRange(), textView.hasMarkedText())
@@ -206,6 +297,12 @@ struct WriterView: View {
     init(file: MarkdownFile? = nil) {
         _file = StateObject(wrappedValue: file ?? MarkdownFile())
     }
+    @State private var findVisible = false
+    @State private var findQuery = ""
+    @State private var matchCase = false
+    @State private var findMatches: [NSRange] = []
+    @State private var activeMatch = 0
+    @FocusState private var findFieldFocused: Bool
     @State private var fileError: String?
     private var document: String {
         get { file.text }
@@ -214,6 +311,7 @@ struct WriterView: View {
     @State private var selectedPage = 0
     @State private var settingsOpen = false
     @State private var editorFocus: EditorFocusRequest?
+    @State private var caretScrollTarget: CaretScrollTarget?
     @State private var wordCount = 0
     @State private var calloutSpans: [PageCalloutMarkers.Span] = []
     private var documentTitle: String { "Clean Writer - \(file.name)" }
@@ -236,6 +334,7 @@ struct WriterView: View {
             }
             VStack(spacing: 0) {
                 toolbar
+                if findVisible { findBar }
                 GeometryReader { geometry in
                     ScrollViewReader { proxy in
                         ScrollView([.horizontal, .vertical], showsIndicators: false) {
@@ -253,6 +352,12 @@ struct WriterView: View {
                         .background(PageZoomGesture { magnification in
                             zoom = min(2, max(0.5, Double(pageScale) * (1 + Double(magnification))))
                         })
+                        .onChange(of: caretScrollTarget?.id) { _, id in
+                            if let id { proxy.scrollTo(id, anchor: .center) }
+                        }
+                        .onChange(of: editorFocus?.id) { _, id in
+                            if id != nil { proxy.scrollTo(selectedPage, anchor: .top) }
+                        }
                         .onChange(of: selectedPage) { _, page in
                             if editorFocus != nil {
                                 proxy.scrollTo(page, anchor: .top)
@@ -270,7 +375,8 @@ struct WriterView: View {
         .navigationTitle(documentTitle)
         .focusedSceneValue(\.writerFileActions, WriterFileActions(
             new: newMarkdown, open: openMarkdown, openRecent: openRecentMarkdown, save: { _ = saveMarkdown() },
-            saveAs: { _ = saveMarkdown(saveAs: true) }, exportPDF: exportPDF))
+            saveAs: { _ = saveMarkdown(saveAs: true) }, exportPDF: exportPDF,
+            find: showFind, findNext: { navigateMatch(1) }, findPrevious: { navigateMatch(-1) }, toggleBookmark: toggleCurrentPageBookmark))
         .alert("File operation failed", isPresented: Binding(
             get: { fileError != nil }, set: { if !$0 { fileError = nil } })) {
                 Button("OK") { fileError = nil }
@@ -280,7 +386,11 @@ struct WriterView: View {
             wordCount = WordCounter.count(newValue)
             calloutSpans = PageCalloutMarkers.scan(newValue)
             selectedPage = min(selectedPage, max(0, pages.count - 1))
+            refreshMatches(select: false)
         }
+        .onChange(of: file.navigationRevision, initial: true) { _, _ in restorePosition() }
+        .onChange(of: findQuery) { _, _ in refreshMatches(select: true) }
+        .onChange(of: matchCase) { _, _ in refreshMatches(select: true) }
     }
 
     private var toolbar: some View {
@@ -304,6 +414,14 @@ struct WriterView: View {
                     .accessibilityLabel("Unsaved changes")
             }
             Spacer()
+            Button(action: toggleCurrentPageBookmark) {
+                Image(systemName: currentPageBookmarks.isEmpty ? "bookmark" : "bookmark.fill")
+            }
+            .help(currentPageBookmarks.isEmpty ? "Bookmark this page at the cursor (⌘D)" : "Remove this page's bookmark (⌘D)")
+            .accessibilityLabel("Toggle bookmark")
+            Button(action: showFind) { Image(systemName: "magnifyingglass") }
+                .help("Find in document (⌘F)")
+                .accessibilityLabel("Find in document")
             Button { preview.toggle() } label: {
                 Image(systemName: preview ? "eye.fill" : "eye")
                     .foregroundStyle(preview ? Color.accentColor : ink)
@@ -326,6 +444,81 @@ struct WriterView: View {
         .padding(.horizontal, 22)
         .frame(height: 48)
         .background(chrome)
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find in document", text: $findQuery)
+                .textFieldStyle(.roundedBorder)
+                .focused($findFieldFocused)
+                .onSubmit { navigateMatch(1) }
+                .onExitCommand(perform: closeFind)
+                .accessibilityLabel("Find in document")
+            Text(findQuery.isEmpty ? "" : findMatches.isEmpty ? "No matches" : "\(activeMatch + 1) of \(findMatches.count)")
+                .font(.system(size: 12)).monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 76)
+                .accessibilityLabel("Search results")
+            Toggle("Aa", isOn: $matchCase)
+                .toggleStyle(.button)
+                .help("Match case")
+                .accessibilityLabel("Match case")
+            Button { navigateMatch(-1) } label: { Image(systemName: "chevron.up") }
+                .disabled(findMatches.isEmpty).help("Previous match (⇧⌘G)")
+                .accessibilityLabel("Previous match")
+            Button { navigateMatch(1) } label: { Image(systemName: "chevron.down") }
+                .disabled(findMatches.isEmpty).help("Next match (⌘G)")
+                .accessibilityLabel("Next match")
+            Button(action: closeFind) { Image(systemName: "xmark") }
+                .help("Close find (Escape)").accessibilityLabel("Close find")
+        }
+        .padding(.horizontal, 22).padding(.vertical, 8)
+        .foregroundStyle(ink).background(chrome)
+    }
+
+    private func showFind() {
+        findVisible = true
+        preview = false
+        refreshMatches(select: true)
+        findFieldFocused = true
+    }
+
+    private func closeFind() {
+        findVisible = false
+        findFieldFocused = false
+        if !findMatches.isEmpty { selectMatch(takeFocus: true) }
+    }
+
+    private func refreshMatches(select: Bool) {
+        findMatches = DocumentSearch.matches(in: document, query: findQuery, matchCase: matchCase)
+        activeMatch = select ? 0 : min(activeMatch, max(0, findMatches.count - 1))
+        if select && findVisible { selectMatch(takeFocus: false) }
+    }
+
+    private func navigateMatch(_ direction: Int) {
+        if !findVisible { showFind() }
+        guard !findMatches.isEmpty else { return }
+        activeMatch = (activeMatch + direction + findMatches.count) % findMatches.count
+        preview = false
+        selectMatch(takeFocus: false)
+    }
+
+    private func selectMatch(takeFocus: Bool) {
+        guard findMatches.indices.contains(activeMatch),
+              var destination = PageLayout.caretDestination(findMatches[activeMatch], in: pages) else { return }
+        destination.takeFocus = takeFocus
+        selectedPage = destination.pageIndex
+        editorFocus = destination
+    }
+
+    private func highlights(on page: PageSlice) -> [NSRange] {
+        guard findVisible else { return [] }
+        return findMatches.compactMap { match in
+            let overlap = NSIntersectionRange(match, page.range)
+            guard overlap.length > 0 else { return nil }
+            return NSRange(location: overlap.location - page.range.location, length: overlap.length)
+        }
     }
 
     private var zoomControls: some View {
@@ -418,7 +611,10 @@ struct WriterView: View {
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 15) {
                     ForEach(pages) { page in
-                        Button { selectedPage = page.index } label: {
+                        Button {
+                            let bookmark = bookmarks(on: page).first
+                            jump(to: bookmark?.offset ?? page.range.location, takeFocus: bookmark != nil || !preview)
+                        } label: {
                             VStack(spacing: 6) {
                                 ZStack(alignment: .topLeading) {
                                     paper
@@ -430,6 +626,7 @@ struct WriterView: View {
                                         .clipped()
                                 }
                                 .frame(width: 108, height: 108 * A4.height / A4.width)
+                                .overlay(alignment: .topLeading) { thumbnailBookmark(for: page) }
                                 .overlay(alignment: .bottomTrailing) { thumbnailMarkers(for: page) }
                                 .overlay(Rectangle().strokeBorder(selectedPage == page.index ? Color.accentColor : ink.opacity(0.12), lineWidth: selectedPage == page.index ? 2 : 1))
                                 Text("\(page.index + 1)").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -476,6 +673,67 @@ struct WriterView: View {
         }
     }
 
+    private var currentPageBookmarks: [DocumentNavigation.Bookmark] {
+        let currentPages = pages
+        let index = PageLayout.caretDestination(NSRange(location: file.navigation.cursor, length: 0),
+                                               in: currentPages)?.pageIndex ?? selectedPage
+        return file.navigation.bookmarks.filter {
+            PageLayout.caretDestination(NSRange(location: $0.offset, length: 0), in: currentPages)?.pageIndex == index
+        }
+    }
+
+    private func toggleCurrentPageBookmark() {
+        let marks = currentPageBookmarks
+        if marks.isEmpty {
+            file.toggleBookmark()
+        } else {
+            // Remove every existing anchor on this page, including older multiple bookmarks.
+            for bookmark in marks { file.removeBookmark(bookmark.id) }
+        }
+    }
+
+    private func bookmarks(on page: PageSlice) -> [DocumentNavigation.Bookmark] {
+        file.navigation.bookmarks.filter {
+            PageLayout.caretDestination(NSRange(location: $0.offset, length: 0), in: pages)?.pageIndex == page.index
+        }
+    }
+
+    @ViewBuilder
+    private func thumbnailBookmark(for page: PageSlice) -> some View {
+        let marks = bookmarks(on: page)
+        if !marks.isEmpty {
+            Image(systemName: "bookmark.fill")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(ink.opacity(0.65))
+                .padding(3)
+                .background(paper.opacity(0.95), in: RoundedRectangle(cornerRadius: 2))
+                .padding(5)
+                .help("\(marks.count) \(marks.count == 1 ? "bookmark" : "bookmarks"). Click to jump; right-click for options.")
+                .accessibilityLabel("Bookmarked page")
+                .contextMenu {
+                    ForEach(Array(marks.enumerated()), id: \.element.id) { index, bookmark in
+                        Menu("Bookmark \(index + 1)") {
+                            Button("Jump to Bookmark") { jump(to: bookmark.offset, takeFocus: true) }
+                            Button("Remove Bookmark") { file.removeBookmark(bookmark.id) }
+                        }
+                    }
+                }
+        }
+    }
+
+    private func restorePosition() {
+        jump(to: file.navigation.cursor, takeFocus: !preview)
+    }
+
+    private func jump(to offset: Int, takeFocus: Bool) {
+        guard var destination = PageLayout.caretDestination(NSRange(location: offset, length: 0), in: pages) else { return }
+        destination.takeFocus = takeFocus
+        if takeFocus { preview = false }
+        file.recordPosition(offset)
+        selectedPage = destination.pageIndex
+        editorFocus = destination
+    }
+
     private func addPage() {
         document += PageLayout.pageBreak
         preview = false
@@ -493,8 +751,26 @@ struct WriterView: View {
                     PageTextEditor(text: page.text, font: displayTypeface,
                                    foreground: dark ? NSColor(white: 0.93, alpha: 1) : NSColor(white: 0.12, alpha: 1),
                                    focusRequest: editorFocus?.pageIndex == page.index ? editorFocus : nil,
-                                   onFocusApplied: { id in
-                                       if editorFocus?.id == id { editorFocus = nil }
+                                   searchHighlights: highlights(on: page),
+                                   onFocusApplied: { id, y in
+                                       if editorFocus?.id == id {
+                                           caretScrollTarget = CaretScrollTarget(pageIndex: page.index, y: y)
+                                           editorFocus = nil
+                                       }
+                                   }, onNavigate: { forward, x in
+                                       let next = page.index + (forward ? 1 : -1)
+                                       let currentPages = pages
+                                       guard currentPages.indices.contains(next) else { return false }
+                                       let target = currentPages[next]
+                                       editorFocus = EditorFocusRequest(
+                                           pageIndex: next,
+                                           selection: NSRange(location: forward ? 0 : target.range.length, length: 0),
+                                           verticalX: x, enterFromTop: forward)
+                                       selectedPage = next
+                                       return true
+                                   }, onSelection: { selection in
+                                       guard selection.location != NSNotFound else { return }
+                                       file.recordPosition(page.range.location + selection.location)
                                    }) { replacement, selection, composing in
                         // Each visible page edits one range of the canonical Markdown string.
                         // Pagination recalculates immediately after every edit.
@@ -504,6 +780,7 @@ struct WriterView: View {
                         guard !composing, selection.location != NSNotFound else { return }
                         let globalSelection = NSRange(location: page.range.location + selection.location,
                                                       length: selection.length)
+                        file.recordPosition(globalSelection.location)
                         if let destination = PageLayout.caretDestination(globalSelection, in: pages),
                            destination.pageIndex != page.index {
                             editorFocus = destination
@@ -525,6 +802,17 @@ struct WriterView: View {
                 .padding(.bottom, 30 * pageScale)
         }
         .frame(width: A4.width * pageScale, height: A4.height * pageScale)
+        .overlay(alignment: .topLeading) {
+            if let target = caretScrollTarget, target.pageIndex == page.index, !preview {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: max(0, CGFloat(margin) * pageScale + target.y))
+                    Color.clear.frame(height: 1).id(target.id)
+                    Spacer(minLength: 0)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
         .foregroundStyle(ink)
         .shadow(color: .black.opacity(dark ? 0.28 : 0.1), radius: 12, y: 4)
     }
@@ -576,8 +864,7 @@ struct WriterView: View {
         guard confirmReplacingDocument() else { return false }
         do {
             try file.open(url)
-            editorFocus = nil
-            selectedPage = 0
+            restorePosition()
             return true
         } catch {
             fileError = error.localizedDescription
