@@ -6,13 +6,13 @@
 
 A focused, native macOS Markdown editor with A4 pages, live preview, notes, and to-do lists.
 
-**[Download from GitHub Releases](https://github.com/chronis10/clean-writer/releases)** · **macOS 14 Sonoma or later** · **Apple Silicon and Intel** · **MIT licensed**
+**[Download from GitHub Releases](https://github.com/chronis10/clean_writer/releases)** · **macOS 14 Sonoma or later** · **Apple Silicon and Intel** · **MIT licensed**
 
 ![Clean Writer in light mode](docs/screenshots/light-preview.png)
 
 ## Download and install
 
-1. Open the [Releases page](https://github.com/chronis10/clean-writer/releases).
+1. Open the [Releases page](https://github.com/chronis10/clean_writer/releases).
 2. Download `Clean-Writer-1.0.0-macOS-universal.dmg` or the equivalent ZIP from **Assets**. GitHub's “Source code” archives are the project source, not the ready-to-run app.
 3. Open the DMG and drag **Clean Writer.app** into **Applications**, or extract the ZIP and move the app there.
 4. Open Clean Writer from Applications.
@@ -144,8 +144,8 @@ Images currently display their alt text rather than embedding the image. HTML re
 Use Xcode 26 or later on macOS. The deployment target is macOS 14. There are no third-party package dependencies.
 
 ```sh
-git clone https://github.com/chronis10/clean-writer.git
-cd clean-writer
+git clone https://github.com/chronis10/clean_writer.git
+cd clean_writer
 open clean_writer.xcodeproj
 ```
 
@@ -164,7 +164,7 @@ The app is produced at `build/Build/Products/Release/Clean Writer.app`. Build pr
 
 ## Contributing
 
-Report bugs or suggest improvements through [GitHub Issues](https://github.com/chronis10/clean-writer/issues). Include the macOS version, app version, steps to reproduce, and a minimal Markdown example. Remove private content from screenshots and sample documents.
+Report bugs or suggest improvements through [GitHub Issues](https://github.com/chronis10/clean_writer/issues). Include the macOS version, app version, steps to reproduce, and a minimal Markdown example. Remove private content from screenshots and sample documents.
 
 Small, focused pull requests are welcome. Please describe the change and how you checked it, including preview and PDF output when changing Markdown rendering.
 
