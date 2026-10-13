@@ -1,0 +1,17 @@
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+dist/
+*.xcarchive
+*.dSYM/
+*.p12
+*.p8
+*.mobileprovision
+.env
+.env.*
+
+.local-tools/
+.publication/
+Markdown examples.md
