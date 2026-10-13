@@ -15,3 +15,10 @@ dist/
 .local-tools/
 .publication/
 Markdown examples.md
+
+# Rust + Tauri
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+playwright-report/
+test-results/

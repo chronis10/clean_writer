@@ -1,0 +1,10 @@
+[Desktop Entry]
+Categories={{categories}}
+Comment={{comment}}
+Exec={{exec}} %f
+StartupWMClass=clean-writer
+Icon={{icon}}
+Name={{name}}
+MimeType=text/markdown;text/x-markdown;
+Terminal=false
+Type=Application

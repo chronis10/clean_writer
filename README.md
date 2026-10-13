@@ -1,178 +1,166 @@
-<p align="center">
-  <img src="clean_writer/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="112" alt="Clean Writer icon">
-</p>
+<p align="center"><img src="src-tauri/icons/128x128.png" width="112" alt="Clean Writer icon"></p>
 
 # Clean Writer
 
-A focused, native macOS Markdown editor with A4 pages, live preview, notes, and to-do lists.
+A focused Markdown editor for **Linux, Windows, and macOS**, rebuilt with **Rust + Tauri 2** on the `rust` branch. The interface uses TypeScript, CSS, and CodeMirror; Rust handles Markdown parsing, native file dialogs, document storage, and recovery. No Swift or Xcode application code is required.
 
-**[Download from GitHub Releases](https://github.com/chronis10/clean_writer/releases)** · **macOS 14 Sonoma or later** · **Apple Silicon and Intel** · **MIT licensed**
+This branch is the cross-platform 2.0 development version. The existing 1.x GitHub releases are the previous macOS application, not builds of this branch.
 
-![Clean Writer in light mode](docs/screenshots/light-preview.png)
-
-## Download and install
-
-1. Open the [Releases page](https://github.com/chronis10/clean_writer/releases).
-2. Download `Clean-Writer-1.1.0-macOS-universal.dmg` or the equivalent ZIP from **Assets**. GitHub's “Source code” archives are the project source, not the ready-to-run app.
-3. Open the DMG and drag **Clean Writer.app** into **Applications**, or extract the ZIP and move the app there.
-4. Open Clean Writer from Applications.
-
-### Opening the unsigned app
-
-**You can use this release without Xcode, an Apple Developer account, or the App Store.** The app is unsigned and is not notarized by Apple, so macOS may block its first launch.
-
-If you trust this release:
-
-1. Move **Clean Writer.app** into **Applications** and try opening it.
-2. Open **System Settings → Privacy & Security**.
-3. Scroll down and click **Open Anyway** for Clean Writer.
-4. Confirm **Open** when macOS asks.
-
-macOS normally remembers this exception, so future launches work by double-clicking the app. Company- or school-managed Macs may restrict this option. You should not disable Gatekeeper globally. See [Apple's instructions for opening unsigned apps](https://support.apple.com/en-us/102445).
-
-The universal app contains `arm64` and `x86_64` binaries. Apple Silicon has been tested locally; an Intel Mac and older macOS versions have not been tested on physical hardware. SHA-256 checksums are attached to each release as `SHA256SUMS.txt`.
+![Clean Writer cross-platform preview](docs/screenshots/light-preview.png)
 
 ## Features
 
-- **A4 writing canvas:** document fonts and margins use print points, with automatic pagination and manual “Add page” breaks. Arrow keys move the cursor between pages.
-- **Markdown source and preview:** switch with the eye button; preview keeps headings, line breaks, lists, tables, and inline formatting readable.
-- **Notes and todos:** blue note callouts, amber todo callouts, and small reminders in the page thumbnails.
-- **Resume and bookmarks:** reopen each file at its last cursor position. Use ⌘D to bookmark the current page at the cursor, or remove its bookmark from any row on that page; bookmarked page previews show a small symbol at the top-left. Click the preview to jump there, or right-click its bookmark symbol for individual jump/remove options. Bookmarks follow edits. The saved cursor and bookmarks are stored locally per file; they are not added to the Markdown text. Renaming/moving a file or editing it externally may affect restoration.
-- **Find:** search the complete Markdown source with ⌘F, highlighted matches, a match count, next/previous navigation with wraparound, and optional case matching. Find switches to source mode; Escape closes the search field and returns to the match.
-- **File handling:** New, Open, Open Recent (10 files), Save, Save As, and Export PDF in the File menu.
-- **Auto-save:** named Markdown files save after a one-second typing pause, and pending changes save when you switch away, close, or quit. Untitled drafts are recovered locally until you choose a file location.
-- **Native spelling assistance:** macOS spell checking, suggestions, and automatic spelling correction in source mode.
-- **Focus controls:** hide the page sidebar, switch light/dark appearance, and zoom from 50% to 200% with the slider or trackpad pinch.
-- **Typography:** serif, sans-serif, and monospaced fonts; adjustable point size and margins.
-- **Document status:** live word and page counts, filename, and an unsaved-change indicator. Failed auto-saves retain the recovered draft and show a retry action.
-- **PDF export:** formatted Markdown on A4 pages, page numbers, Unicode text, callouts, tables, and long content flowing onto additional pages. Export is independent of screen zoom.
+- Continuous Markdown source editing with undo/redo, cross-document selection within a file, search, and line wrapping.
+- Local and web images in preview, thumbnails, and PDF export, with an Insert image file picker.
+- Formatted A4 preview with automatic pagination, page numbers, thumbnails, and manual page breaks.
+- Headings, emphasis, strikethrough, code, links, tables, nested lists, quotes, and task lists.
+- Blue `[!NOTE]` and amber `[!TODO]` callouts. Quoted and bare markers are supported; markers inside code stay literal.
+- New, Open, Open Recent, Save, Save As, and Export PDF through native menus and toolbar controls.
+- One-second autosave for named documents, draft recovery, per-file cursor positions, and bookmarks that follow edits.
+- Safe file replacement and external-change detection. A failed save retains your recovery copy; use Save As if another editor changed the file.
+- Light/dark appearance, serif/sans/monospaced fonts, font size, margins, sidebar visibility, and 50–200% zoom.
+- Markdown file associations in installers, command-line file opening, and a single desktop instance.
+- Local-only storage: no account, analytics, cloud backend, or automatic updater.
 
-![Clean Writer in dark mode](docs/screenshots/dark-preview.png)
+## Run from source
+
+Install **Node.js 22 LTS**, **Rust stable**, and the [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system.
+
+Rust and Node.js are required to build/run from source. They are not required to use a packaged installer.
+
+On Linux/macOS, install Rust using the [official rustup installer](https://rust-lang.org/tools/install/):
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. "$HOME/.cargo/env"
+cargo --version
+rustc --version
+```
+
+Choose the default installation when prompted. On Windows, download and run `rustup-init.exe` from the official installation page, then open a new terminal and verify `cargo --version` and `rustc --version`.
+
+On Debian/Ubuntu:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+Windows requires Microsoft C++ Build Tools with the desktop C++ workload and WebView2. macOS requires Xcode Command Line Tools. Linux file dialogs use the desktop's XDG portal; a working `xdg-desktop-portal` and an appropriate desktop backend are needed.
+
+From the repository root:
+
+```sh
+npm ci
+npm run desktop
+```
+
+### Troubleshooting: Cargo not found
+
+If `npm run desktop` reports `failed to run 'cargo metadata'` with `No such file or directory (os error 2)`, Tauri cannot find Cargo. Install Rust using the instructions above, or open a new terminal after an existing installation.
+
+On Linux/macOS, activate the default installation in your current shell:
+
+```sh
+. "$HOME/.cargo/env"
+cargo --version
+npm run desktop
+```
+
+On Windows, ensure `%USERPROFILE%\.cargo\bin` is on `PATH` and restart your terminal. Temporary tools under `.local-tools/` are not included in Git; a fresh checkout needs its own Rust installation.
+
+`npm run dev` opens only the browser interface for layout work. Native files, Rust Markdown rendering, and PDF export require `npm run desktop`.
+
+## Build installers
+
+```sh
+npm run desktop:build
+```
+
+Output is under `src-tauri/target/release/bundle/`. Build on the target operating system: Windows installers on Windows, macOS bundles/DMGs on macOS, and Linux packages on Linux. The GitHub Actions workflow builds all three and uploads artifacts; it does not publish releases. Builds are unsigned unless signing is configured separately. The macOS CI job builds the runner's architecture, not a universal Intel/Apple Silicon binary.
 
 ## Keyboard shortcuts
 
+Use **Ctrl** on Windows/Linux and **⌘** on macOS.
+
 | Action | Shortcut |
 | --- | --- |
-| Add / remove bookmark | ⌘D |
-| Find | ⌘F |
-| Next / previous match | ⌘G / ⇧⌘G |
-| Close Find (in its search field) | Escape |
-| New document | ⌘N |
-| Open | ⌘O |
-| Save | ⌘S |
-| Save As | ⇧⌘S |
-| Export PDF | ⇧⌘E |
-| Show/hide page sidebar | ⌃⌘S |
+| New | Ctrl/⌘N |
+| Open | Ctrl/⌘O |
+| Save | Ctrl/⌘S |
+| Save As | Ctrl/⌘Shift+S |
+| Export PDF | Ctrl/⌘Shift+E |
+| Find | Ctrl/⌘F |
+| Next / previous match | Ctrl/⌘G / Ctrl/⌘Shift+G |
+| Toggle bookmark at cursor | Ctrl/⌘D |
+| Toggle sidebar | Ctrl/⌘Alt+S |
+| Undo / redo | Ctrl/⌘Z / Ctrl/⌘Shift+Z |
+| Quit | Ctrl/⌘Q |
 
-The eye, sun/moon, and cog buttons control preview, appearance, and typography. Click the zoom percentage to return to 100%.
+Use the zoom slider, Ctrl+wheel/trackpad pinch, or click the zoom percentage to reset to 100%. Preview is read-only; edit task-list markers in source to complete tasks.
 
-## Supported Markdown
+## Documents and recovery
 
-| Element | Syntax |
-| --- | --- |
-| Headings | `# Heading` through `###### Heading`; underline-style headings also parse |
-| Bold / italic | `**bold**`, `*italic*`, `***bold italic***` |
-| Strikethrough | `~~removed text~~` |
-| Inline code | Backticks around code |
-| Bullet lists | `- item`, `* item`, or `+ item` |
-| Numbered lists | `1. item`; starting numbers are preserved |
-| Nested lists | Indent child items beneath their parent; mixed bullets and numbering work |
-| Task lists | `- [ ] Pending` and `- [x] Done` |
-| Quotes / nested quotes | `> Quote` and `> > Nested quote` |
-| Fenced / indented code | Triple backticks, triple tildes, or an indented code block |
-| Links | `[label](https://example.com)`; reference links and Markdown autolinks also parse |
-| Horizontal rule | `---`, `***`, or `___` on a separate line |
-| Tables | Pipe-separated cells and a header separator; left, center, and right column alignment |
-| Notes / todos | `> [!NOTE]` and `> [!TODO]`; bare markers at the start of a paragraph are also accepted |
-| Escaped punctuation | `\*literal asterisks\*` |
+Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and appear as a labelled divider in source mode. Automatic A4 pagination affects preview and PDF, not the saved Markdown.
 
-### Lists and nested numbering
+Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Close/quit flushes recovery; named documents also save when possible. Abrupt process termination can lose edits made since the last completed checkpoint.
+
+The Swift application's macOS preferences are not imported. Your existing Markdown documents can be opened directly; previously stored settings, recent files, bookmarks, and unsaved Swift drafts remain in the old application's preferences.
+
+## Images
+
+Use **··· → Insert image…**, or ordinary Markdown:
 
 ```markdown
-- A main item
-  - A nested bullet
-    - A deeper bullet
-
-3. Start at three
-   1. First subitem
-   2. Second subitem
-4. Continue at four
+![A photo](images/photo.png)
+![A filename with spaces](<images/my photo.jpg>)
+![A web image](https://example.com/photo.png)
 ```
 
-Wrapped list text aligns with the item body, and continuation paragraphs do not repeat the marker.
+Local paths resolve relative to the saved Markdown file. Keep an `images/` folder beside your document for portability. The picker inserts a relative link for files within the document's folder, and an absolute `file://` link otherwise. Save an untitled document before using relative paths; absolute links work in untitled drafts.
 
-### Notes and tasks
+PNG, JPEG, GIF, WebP, and BMP are supported. GIFs render their first frame. JPEG camera orientation is applied. SVG is not supported. Images fit within A4 content margins, move intact between pages, and are embedded into exported PDFs. Missing or unsupported images show an inline placeholder; hover over it for the error.
 
-```markdown
-> [!NOTE]
-> Remember **this detail**.
+Web image URLs are downloaded when rendering preview or generating page thumbnails, including while editing source. PDF export fetches them again. Requests do not use browser login cookies. Local-only documents remain offline; linking a web image contacts its host. Embedded base64 raster images are also supported.
 
-> [!TODO]
-> - [ ] Finish the introduction
->   - [ ] Check the references
-> - [x] Review the draft
-```
+Images are limited to 16 MB per file/download and 8192 pixels per dimension; large images are resized to at most 2400 pixels per dimension for display/export. Preview caches up to 16 images for 30 seconds; reopening preview refreshes them.
 
-Preview is read-only: edit `[ ]` to `[x]` in source to complete a task. Notes that span pages keep their thumbnail reminder on each relevant page. Literal examples inside code blocks do not trigger reminders.
+## Current differences and limits
 
-### Tables
+- Source editing is continuous on a paper-width canvas. Preview and PDF use separate A4 pages; source thumbnails jump to the corresponding manual section.
+- PDF pages are high-resolution images of the formatted layout, including Unicode and page numbers. Exported text is **not selectable/searchable**, and long PDFs can be large. This differs from the previous native text PDF exporter.
+- Fonts and webview text metrics can differ between operating systems. Long blocks flow across pages; unusual oversized non-text content may require smaller fonts or margins.
+- HTML is displayed as literal text. No mathematical formulas, syntax colouring, or footnotes are provided.
+- Webview spelling assistance depends on the operating system; native macOS automatic correction parity is not guaranteed.
+- Files must be UTF-8 and at most 20 MB when opened. Very long documents may take time to paginate or export.
+- Windows/macOS installers require their respective build/test environments. Local verification of this branch is on Linux; CI configuration does not itself prove a successful build on those systems.
 
-```markdown
-| Feature | Status | Count |
-| :--- | :---: | ---: |
-| Nested lists | Ready | 3 |
-| Notes | Ready | 2 |
-```
-
-### Code
-
-````markdown
-```swift
-let title = "Clean Writer"
-print(title)
-```
-````
-
-![Editing Markdown source](docs/screenshots/source-editor.png)
-
-## Files, privacy, and current limits
-
-Clean Writer writes UTF-8 `.md` files. Draft recovery, cursor positions, document bookmarks, saved-file access permissions, and recent-file history are stored locally in macOS preferences. There is no account, analytics service, or cloud backend in the app. Clicking a Markdown link opens that destination in your browser.
-
-Manual page breaks use the form-feed character (`U+000C`) in the saved Markdown source. Other editors may display or ignore it. Automatic page boundaries in source mode measure source text; formatted preview and PDF can wrap differently, so the exported PDF page count may differ from the editor's count.
-
-The editor uses separate text views for each source page. Typing overflow and arrow-key movement transfer the caret between pages automatically, but selecting or editing text across multiple pages is not a continuous single-text-view selection. Markdown is parsed per visible source page in preview, so a Markdown block split by a source page boundary can lose context there; PDF export renders each manually separated document section before pagination.
-
-Images currently display their alt text rather than embedding the image. HTML rendering, syntax highlighting, mathematical formulas, footnotes, and automatic application updates are not provided. Updates can be downloaded from GitHub Releases.
-
-## Build from source
-
-Use Xcode 26 or later on macOS. The deployment target is macOS 14. There are no third-party package dependencies.
+## Checks
 
 ```sh
-git clone https://github.com/chronis10/clean_writer.git
-cd clean_writer
-open clean_writer.xcodeproj
+npm test
+npm run format:check
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo test --manifest-path src-tauri/Cargo.toml --locked -- --ignored
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --locked -- -D warnings
+npx playwright install chromium
+npm run test:ui
 ```
 
-Choose the `clean_writer` scheme and run. Code signing is disabled in the project; an Apple Developer account is not required to build it.
+Rust tests cover Markdown rendering, image decoding and path resolution, JPEG orientation, Unicode saves, recovery, navigation, external-change protection, and failed-open rollback. TypeScript tests cover document anchors and preferences. UI tests exercise editing, save failures, document replacement, search, pagination, appearance, and PDF generation using a mocked desktop bridge; they do not replace native OS testing.
 
-For an unsigned universal release build:
+## Project structure
 
-```sh
-xcodebuild -project clean_writer.xcodeproj -scheme clean_writer \
-  -configuration Release -destination 'generic/platform=macOS' \
-  -derivedDataPath build ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
-  CODE_SIGNING_ALLOWED=NO build
+```text
+src/                 TypeScript editor, interface, and page layout
+src-tauri/src/       Rust desktop commands, Markdown parser, storage
+src-tauri/icons/     Desktop icons
+src-tauri/           Tauri configuration and Rust dependencies
+tests/               Unit tests and browser interface tests
+.github/workflows/   Windows, Linux, and macOS build pipeline
 ```
-
-The app is produced at `build/Build/Products/Release/Clean Writer.app`. Build products, personal Xcode settings, signing material, and local development helpers are excluded from the repository.
-
-## Contributing
-
-Report bugs or suggest improvements through [GitHub Issues](https://github.com/chronis10/clean_writer/issues). Include the macOS version, app version, steps to reproduce, and a minimal Markdown example. Remove private content from screenshots and sample documents.
-
-Small, focused pull requests are welcome. Please describe the change and how you checked it, including preview and PDF output when changing Markdown rendering.
 
 ## License
 

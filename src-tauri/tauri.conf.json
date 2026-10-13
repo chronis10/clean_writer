@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Clean Writer",
+  "version": "2.0.0",
+  "identifier": "com.chronis10.cleanwriter",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Clean Writer",
+        "width": 1180,
+        "height": 850,
+        "minWidth": 720,
+        "minHeight": 500,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "A focused Markdown writing space",
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown"],
+        "name": "Markdown document",
+        "role": "Editor"
+      }
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["xdg-desktop-portal"],
+        "desktopTemplate": "desktop.template"
+      },
+      "rpm": {
+        "depends": ["xdg-desktop-portal"],
+        "desktopTemplate": "desktop.template"
+      }
+    }
+  }
+}
