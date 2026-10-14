@@ -23,12 +23,8 @@ export async function resolveImages(
   const images = templates.flatMap((t) =>
     Array.from(t.content.querySelectorAll<HTMLImageElement>("img")),
   );
-  const maxWidth = PAGE_WIDTH - (2 * prefs.margin * 4) / 3 - 2;
-  const maxHeight =
-    PAGE_HEIGHT -
-    (2 * prefs.margin * 4) / 3 -
-    ((2 * prefs.size * 4) / 3) * 1.55 -
-    60;
+  const maxWidth = PAGE_WIDTH - 2 * prefs.margin - 2;
+  const maxHeight = PAGE_HEIGHT - 2 * prefs.margin - 2 * prefs.size * 1.2 - 60;
   const sources = images.map((img) => {
     const source =
       img.getAttribute("data-image-source") || img.getAttribute("src") || "";

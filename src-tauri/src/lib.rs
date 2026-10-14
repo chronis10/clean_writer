@@ -10,6 +10,56 @@ use std::{
 };
 use tauri::{Emitter, Manager, State};
 
+#[tauri::command]
+fn update_recent_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    let Some(tauri::menu::MenuItemKind::Submenu(file)) = menu.get("file") else {
+        return Ok(());
+    };
+    let Some(tauri::menu::MenuItemKind::Submenu(recent)) = file.get("recent") else {
+        return Ok(());
+    };
+    while !recent.items().map_err(|e| e.to_string())?.is_empty() {
+        recent.remove_at(0).map_err(|e| e.to_string())?;
+    }
+    if paths.is_empty() {
+        recent
+            .append(
+                &tauri::menu::MenuItem::with_id(
+                    &app,
+                    "no-recent",
+                    "No Recent Files",
+                    false,
+                    None::<&str>,
+                )
+                .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+    } else {
+        for (index, path) in paths.iter().take(10).enumerate() {
+            let title = Path::new(path)
+                .file_name()
+                .and_then(|p| p.to_str())
+                .unwrap_or(path);
+            recent
+                .append(
+                    &tauri::menu::MenuItem::with_id(
+                        &app,
+                        format!("recent-{index}"),
+                        title,
+                        true,
+                        None::<&str>,
+                    )
+                    .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 struct Runtime {
     session: Session,
     saved_text: Option<String>,
@@ -363,8 +413,9 @@ pub fn run() {
                     )?,
                 ],
             )?)?;
-            let file = tauri::menu::Submenu::with_items(
+            let file = tauri::menu::Submenu::with_id_and_items(
                 app.handle(),
+                "file",
                 "File",
                 true,
                 &[
@@ -405,6 +456,14 @@ pub fn run() {
                     )?,
                 ],
             )?;
+            let recent = tauri::menu::Submenu::with_id_and_items(
+                app.handle(),
+                "recent",
+                "Open Recent",
+                true,
+                &[],
+            )?;
+            file.insert(&recent, 2)?;
             menu.append(&file)?;
             menu.append(&tauri::menu::Submenu::with_items(
                 app.handle(),
@@ -465,6 +524,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             initial_state,
+            update_recent_menu,
             render_markdown,
             load_image,
             pick_image,

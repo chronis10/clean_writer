@@ -10,13 +10,13 @@ This branch is the cross-platform 2.0 development version. The existing 1.x GitH
 
 ## Features
 
-- Continuous Markdown source editing with undo/redo, cross-document selection within a file, search, and line wrapping.
+- A4 source pages with the Swift app’s 595.28 × 841.89-point canvas, neutral light/dark appearance, 192-point sidebar, icon toolbar, and footer. One CodeMirror document keeps undo/redo, selection across pages, search, and line wrapping.
 - Local and web images in preview, thumbnails, and PDF export, with an Insert image file picker.
 - Formatted A4 preview with automatic pagination, page numbers, thumbnails, and manual page breaks.
 - Headings, emphasis, strikethrough, code, links, tables, nested lists, quotes, and task lists.
 - Blue `[!NOTE]` and amber `[!TODO]` callouts. Quoted and bare markers are supported; markers inside code stay literal.
-- New, Open, Open Recent, Save, Save As, and Export PDF through native menus and toolbar controls.
-- One-second autosave for named documents, draft recovery, per-file cursor positions, and bookmarks that follow edits.
+- New, Open, Open Recent, Save, Save As, and Export PDF through native File menus.
+- One-second autosave, draft recovery, per-file cursor positions, and bookmarks that follow edits. A small bookmark symbol appears at the top-left of page thumbnails; note/todo symbols stay bottom-right. Toggle a bookmark from any row on its page.
 - Safe file replacement and external-change detection. A failed save retains your recovery copy; use Save As if another editor changed the file.
 - Light/dark appearance, serif/sans/monospaced fonts, font size, margins, sidebar visibility, and 50–200% zoom.
 - Markdown file associations in installers, command-line file opening, and a single desktop instance.
@@ -83,25 +83,25 @@ Output is under `src-tauri/target/release/bundle/`. Build on the target operatin
 
 Use **Ctrl** on Windows/Linux and **⌘** on macOS.
 
-| Action | Shortcut |
-| --- | --- |
-| New | Ctrl/⌘N |
-| Open | Ctrl/⌘O |
-| Save | Ctrl/⌘S |
-| Save As | Ctrl/⌘Shift+S |
-| Export PDF | Ctrl/⌘Shift+E |
-| Find | Ctrl/⌘F |
-| Next / previous match | Ctrl/⌘G / Ctrl/⌘Shift+G |
-| Toggle bookmark at cursor | Ctrl/⌘D |
-| Toggle sidebar | Ctrl/⌘Alt+S |
-| Undo / redo | Ctrl/⌘Z / Ctrl/⌘Shift+Z |
-| Quit | Ctrl/⌘Q |
+| Action                       | Shortcut                |
+| ---------------------------- | ----------------------- |
+| New                          | Ctrl/⌘N                 |
+| Open                         | Ctrl/⌘O                 |
+| Save                         | Ctrl/⌘S                 |
+| Save As                      | Ctrl/⌘Shift+S           |
+| Export PDF                   | Ctrl/⌘Shift+E           |
+| Find                         | Ctrl/⌘F                 |
+| Next / previous match        | Ctrl/⌘G / Ctrl/⌘Shift+G |
+| Toggle current page bookmark | Ctrl/⌘D                 |
+| Toggle sidebar               | Ctrl/⌘Alt+S             |
+| Undo / redo                  | Ctrl/⌘Z / Ctrl/⌘Shift+Z |
+| Quit                         | Ctrl/⌘Q                 |
 
 Use the zoom slider, Ctrl+wheel/trackpad pinch, or click the zoom percentage to reset to 100%. Preview is read-only; edit task-list markers in source to complete tasks.
 
 ## Documents and recovery
 
-Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and appear as a labelled divider in source mode. Automatic A4 pagination affects preview and PDF, not the saved Markdown.
+Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and create a new A4 source page. Automatic A4 page spaces in source, preview, and PDF do not change the saved Markdown.
 
 Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Close/quit flushes recovery; named documents also save when possible. Abrupt process termination can lose edits made since the last completed checkpoint.
 
@@ -127,13 +127,13 @@ Images are limited to 16 MB per file/download and 8192 pixels per dimension; lar
 
 ## Current differences and limits
 
-- Source editing is continuous on a paper-width canvas. Preview and PDF use separate A4 pages; source thumbnails jump to the corresponding manual section.
+- Source pagination measures Markdown source rows; formatted preview/PDF can have a different page count. Page thumbnails represent source pages and jump to their source position or bookmark.
 - PDF pages are high-resolution images of the formatted layout, including Unicode and page numbers. Exported text is **not selectable/searchable**, and long PDFs can be large. This differs from the previous native text PDF exporter.
 - Fonts and webview text metrics can differ between operating systems. Long blocks flow across pages; unusual oversized non-text content may require smaller fonts or margins.
 - HTML is displayed as literal text. No mathematical formulas, syntax colouring, or footnotes are provided.
 - Webview spelling assistance depends on the operating system; native macOS automatic correction parity is not guaranteed.
 - Files must be UTF-8 and at most 20 MB when opened. Very long documents may take time to paginate or export.
-- Windows/macOS installers require their respective build/test environments. Local verification of this branch is on Linux; CI configuration does not itself prove a successful build on those systems.
+- Installers require their respective build/test environments. UI and backend checks on one platform do not prove installer behavior on other operating systems.
 
 ## Checks
 

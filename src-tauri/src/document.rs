@@ -102,7 +102,7 @@ pub fn render(text: &str) -> Rendered {
         output = output.replace("<img src=", "<img data-image-source=");
         callout.replace_all(&output, |caps: &regex::Captures| {
             let kind = caps[1].to_ascii_lowercase();
-            format!("<blockquote class=\"callout {kind}\"><p><strong class=\"callout-label\">{}</strong><br>", kind.to_ascii_uppercase())
+            format!("<blockquote class=\"callout {kind}\"><p><strong class=\"callout-label\">{}</strong><br>", if kind == "note" { "Note" } else { "To do" })
         }).into_owned()
     }).collect();
     Rendered { sections, words }
