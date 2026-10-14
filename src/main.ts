@@ -360,6 +360,9 @@ function updateSettings() {
   $("margin-value").textContent = `${prefs.margin} pt`;
   $<HTMLInputElement>("zoom").value = String(Math.round(prefs.zoom * 100));
   $("zoom-value").textContent = `${Math.round(prefs.zoom * 100)}%`;
+  // Thumbnails live outside the document hosts, so share typography explicitly.
+  // Keep their scale fixed while the main document zooms independently.
+  stylePaper($("thumbnails"), prefs);
   for (const host of [$("source-host"), $("preview-host")]) {
     stylePaper(host, prefs);
     host.style.zoom = String(prefs.zoom);

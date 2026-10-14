@@ -491,3 +491,44 @@ test("source page spaces keep long paragraphs and manual blank pages editable", 
     )
     .toBe(text + " added");
 });
+
+test("thumbnails refresh font, size, margins and page slices with typography", async ({
+  page,
+}) => {
+  await setup(
+    page,
+    Array.from({ length: 90 }, (_, i) => `Line ${i + 1}: body text.`).join(
+      "\n",
+    ),
+  );
+  await expect(page.locator(".thumbnail")).toHaveCount(3);
+  const previousText = await page.locator(".mini-text").first().textContent();
+  await page.locator("#settings").click();
+  await page.locator("#font").selectOption("Mono");
+  await page.locator("#size").fill("22");
+  await page.locator("#margin").selectOption("85");
+  await expect(page.locator(".thumbnail")).toHaveCount(4);
+  const typography = await page
+    .locator(".mini-text")
+    .first()
+    .evaluate((el) => {
+      const style = getComputedStyle(el);
+      return {
+        size: parseFloat(style.fontSize),
+        font: style.fontFamily,
+        margin: parseFloat(style.paddingTop),
+        text: el.textContent,
+      };
+    });
+  expect(typography.size).toBeCloseTo((22 * 108) / 595.28, 2);
+  expect(typography.font).toContain("Menlo");
+  expect(typography.margin).toBeCloseTo((85 * 108) / 595.28, 2);
+  expect(typography.text).not.toBe(previousText);
+  await page.locator("#zoom-in").click();
+  expect(
+    await page
+      .locator(".mini-text")
+      .first()
+      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize)),
+  ).toBeCloseTo(typography.size, 2);
+});
