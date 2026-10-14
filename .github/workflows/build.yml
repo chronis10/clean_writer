@@ -5,6 +5,11 @@ on:
     tags: ["v2.*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional release tag, such as v2.0.0-beta.3. Leave blank for a build only."
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -48,6 +53,13 @@ jobs:
           npm run test:ui
       - name: Build installers
         run: npm run desktop:build
+      - name: Package macOS app bundle
+        if: runner.os == 'macOS'
+        run: |
+          app="src-tauri/target/release/bundle/macos/Clean Writer.app"
+          archive="src-tauri/target/release/bundle/Clean-Writer-2.0.0-macOS-arm64-app.zip"
+          test -d "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
       - name: Native close confirmation
         if: runner.os == 'Linux'
         run: dbus-run-session -- python3 tests/native_close.py --package "src-tauri/target/release/bundle/deb/Clean Writer_2.0.0_amd64.deb"
@@ -61,10 +73,11 @@ jobs:
             src-tauri/target/release/bundle/**/*.msi
             src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.app.zip
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v2.')
+    if: startsWith(github.ref, 'refs/tags/v2.') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: desktop
     runs-on: ubuntu-22.04
     permissions:
@@ -78,15 +91,20 @@ jobs:
       - name: Publish downloadable installers
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           mkdir -p publish
-          find release-assets -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} publish/ \;
+          if [[ ! "$RELEASE_TAG" =~ ^v2\..+ ]]; then echo "Release tags must start with v2." >&2; exit 1; fi
+          find release-assets -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.app.zip' \) -exec cp {} publish/ \;
           test -n "$(find publish -type f -print -quit)"
+          for file in publish/*; do
+            name="$(basename "$file" | tr ' ' '.')"
+            if [[ "$name" != "$(basename "$file")" ]]; then mv "$file" "publish/$name"; fi
+          done
           (cd publish && sha256sum * > SHA256SUMS.txt)
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             args=()
             if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease --latest=false); fi
-            gh release create "$RELEASE_TAG" --verify-tag --title "Clean Writer $RELEASE_TAG (Rust)" --generate-notes "${args[@]}"
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "Clean Writer $RELEASE_TAG (Rust)" --generate-notes "${args[@]}"
           fi
           gh release upload "$RELEASE_TAG" publish/* --clobber
