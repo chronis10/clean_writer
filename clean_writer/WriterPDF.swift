@@ -3,7 +3,7 @@ import AppKit
 /// Typesets rendered Markdown into A4 pages independently of on-screen zoom.
 enum WriterPDF {
     static func data(document: String, font: NSFont, margin: CGFloat,
-                     pageSize: CGSize, footerSpace: CGFloat) throws -> Data {
+                     pageSize: CGSize, footerSpace: CGFloat, documentURL: URL? = nil) throws -> Data {
         let data = NSMutableData()
         var mediaBox = CGRect(origin: .zero, size: pageSize)
         guard let consumer = CGDataConsumer(data: data as CFMutableData),
@@ -16,7 +16,7 @@ enum WriterPDF {
 
         for section in document.components(separatedBy: "\u{000C}") {
             let rendered = NSMutableAttributedString(attributedString:
-                MarkdownPreview.native(section, font: font))
+                MarkdownPreview.native(section, font: font, documentURL: documentURL, imageSize: bodySize))
             let fullRange = NSRange(location: 0, length: rendered.length)
             rendered.enumerateAttribute(.foregroundColor, in: fullRange) { color, range, _ in
                 if color == nil { rendered.addAttribute(.foregroundColor, value: NSColor.black, range: range) }

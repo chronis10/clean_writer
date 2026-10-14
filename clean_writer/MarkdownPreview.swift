@@ -4,7 +4,10 @@ import AppKit
 /// Converts Markdown semantics into explicit typography and native paragraph layout.
 enum MarkdownPreview {
     static func render(_ source: String, font: NSFont) -> AttributedString { layout(source, font: font).preview }
-    static func native(_ source: String, font: NSFont) -> NSAttributedString { layout(source, font: font).native }
+    static func native(_ source: String, font: NSFont, documentURL: URL? = nil,
+                       imageSize: CGSize = CGSize(width: 467, height: 672)) -> NSAttributedString {
+        layout(source, font: font, documentURL: documentURL, imageSize: imageSize).native
+    }
 
     private struct Block {
         var identity: Int?
@@ -53,7 +56,8 @@ enum MarkdownPreview {
         }
     }
 
-    private static func layout(_ source: String, font: NSFont) -> (preview: AttributedString, native: NSAttributedString) {
+    private static func layout(_ source: String, font: NSFont, documentURL: URL? = nil,
+                               imageSize: CGSize = CGSize(width: 467, height: 672)) -> (preview: AttributedString, native: NSAttributedString) {
         guard let parsed = try? AttributedString(markdown: MarkdownCallout.prepare(source)) else {
             var fallback = AttributedString(source)
             fallback.swiftUI.font = Font(font)
@@ -101,8 +105,18 @@ enum MarkdownPreview {
                 value.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
                 value.addAttribute(.link, value: link, range: range)
             }
-            native.append(value)
-            output.append(preview)
+            if let imageURL = text.imageURL {
+                if let attachment = MarkdownImage.attachment(imageURL, documentURL: documentURL, size: imageSize) {
+                    native.append(NSAttributedString(attachment: attachment))
+                } else {
+                    native.append(NSAttributedString(string: "[Image: " + String(text.characters) + "]", attributes: [.font: nativeFont]))
+                }
+                // Keep an image-only block visible to the separator/layout logic.
+                output.append(AttributedString("\u{FFFC}"))
+            } else {
+                native.append(value)
+                output.append(preview)
+            }
         }
         func plain(_ string: String, style: MarkdownCallout? = nil, label: Bool = false) {
             let face = label ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font

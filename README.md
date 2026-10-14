@@ -13,7 +13,7 @@ A focused, native macOS Markdown editor with A4 pages, live preview, notes, and 
 ## Download and install
 
 1. Open the [Releases page](https://github.com/chronis10/clean_writer/releases).
-2. Download `Clean-Writer-1.1.0-macOS-universal.dmg` or the equivalent ZIP from **Assets**. GitHub's “Source code” archives are the project source, not the ready-to-run app.
+2. Download `Clean-Writer-1.2.0-macOS-universal.dmg` or the equivalent ZIP from **Assets**. GitHub's “Source code” archives are the project source, not the ready-to-run app.
 3. Open the DMG and drag **Clean Writer.app** into **Applications**, or extract the ZIP and move the app there.
 4. Open Clean Writer from Applications.
 
@@ -39,6 +39,8 @@ The universal app contains `arm64` and `x86_64` binaries. Apple Silicon has been
 - **Notes and todos:** blue note callouts, amber todo callouts, and small reminders in the page thumbnails.
 - **Resume and bookmarks:** reopen each file at its last cursor position. Use ⌘D to bookmark the current page at the cursor, or remove its bookmark from any row on that page; bookmarked page previews show a small symbol at the top-left. Click the preview to jump there, or right-click its bookmark symbol for individual jump/remove options. Bookmarks follow edits. The saved cursor and bookmarks are stored locally per file; they are not added to the Markdown text. Renaming/moving a file or editing it externally may affect restoration.
 - **Find:** search the complete Markdown source with ⌘F, highlighted matches, a match count, next/previous navigation with wraparound, and optional case matching. Find switches to source mode; Escape closes the search field and returns to the match.
+- **Insert menu:** supported Markdown commands with selection formatting and editable templates, including headings, text styles, lists, tasks, quotes, code, links, tables, notes, and page breaks.
+- **Local images:** Insert → Image opens a file browser in the document’s folder. Images render in preview, preview thumbnails, and PDF export.
 - **File handling:** New, Open, Open Recent (10 files), Save, Save As, and Export PDF in the File menu.
 - **Auto-save:** named Markdown files save after a one-second typing pause, and pending changes save when you switch away, close, or quit. Untitled drafts are recovered locally until you choose a file location.
 - **Native spelling assistance:** macOS spell checking, suggestions, and automatic spelling correction in source mode.
@@ -48,6 +50,14 @@ The universal app contains `arm64` and `x86_64` binaries. Apple Silicon has been
 - **PDF export:** formatted Markdown on A4 pages, page numbers, Unicode text, callouts, tables, and long content flowing onto additional pages. Export is independent of screen zoom.
 
 ![Clean Writer in dark mode](docs/screenshots/dark-preview.png)
+
+## Insert menu and images
+
+Use **Insert** for Markdown syntax you do not remember. Inline commands wrap selected text; headings and lists format the current or selected lines. Empty content gets an editable placeholder. Insertions support Undo/Redo.
+
+**Insert → Image…** saves an untitled document first, then opens the native image picker. Cancelling either dialog leaves the text unchanged. Images use relative paths such as `photo.png`, `images/photo.png`, or `../assets/photo.png`; spaces and special characters are URL-encoded. Files stay in their original location. Keep your Markdown document and image folders together when sharing them.
+
+Local PNG, JPEG, GIF, WebP, BMP, and TIFF images are supported. Images shrink to fit the page while preserving their aspect ratio. Missing images show an alt-text placeholder. Web image downloads are not supported by the native Swift version.
 
 ## Keyboard shortcuts
 
@@ -80,6 +90,7 @@ The eye, sun/moon, and cog buttons control preview, appearance, and typography. 
 | Task lists | `- [ ] Pending` and `- [x] Done` |
 | Quotes / nested quotes | `> Quote` and `> > Nested quote` |
 | Fenced / indented code | Triple backticks, triple tildes, or an indented code block |
+| Images | `![description](images/photo.png)`; use Insert → Image to browse |
 | Links | `[label](https://example.com)`; reference links and Markdown autolinks also parse |
 | Horizontal rule | `---`, `***`, or `___` on a separate line |
 | Tables | Pipe-separated cells and a header separator; left, center, and right column alignment |

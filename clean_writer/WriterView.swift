@@ -309,6 +309,7 @@ struct WriterView: View {
         nonmutating set { file.text = newValue }
     }
     @State private var selectedPage = 0
+    @State private var insertionSelection = NSRange(location: 0, length: 0)
     @State private var settingsOpen = false
     @State private var editorFocus: EditorFocusRequest?
     @State private var caretScrollTarget: CaretScrollTarget?
@@ -376,7 +377,7 @@ struct WriterView: View {
         .focusedSceneValue(\.writerFileActions, WriterFileActions(
             new: newMarkdown, open: openMarkdown, openRecent: openRecentMarkdown, save: { _ = saveMarkdown() },
             saveAs: { _ = saveMarkdown(saveAs: true) }, exportPDF: exportPDF,
-            find: showFind, findNext: { navigateMatch(1) }, findPrevious: { navigateMatch(-1) }, toggleBookmark: toggleCurrentPageBookmark))
+            find: showFind, findNext: { navigateMatch(1) }, findPrevious: { navigateMatch(-1) }, toggleBookmark: toggleCurrentPageBookmark, insert: insertMarkdown))
         .alert("File operation failed", isPresented: Binding(
             get: { fileError != nil }, set: { if !$0 { fileError = nil } })) {
                 Button("OK") { fileError = nil }
@@ -618,9 +619,20 @@ struct WriterView: View {
                             VStack(spacing: 6) {
                                 ZStack(alignment: .topLeading) {
                                     paper
-                                    Text(page.text.isEmpty ? " " : page.text)
-                                        .font(Font(PageLayout.font(name: fontName, size: fontSize * 108 / Double(A4.width))))
-                                        .foregroundStyle(ink.opacity(0.75))
+                                    Group {
+                                        if preview {
+                                            MarkdownPagePreview(source: page.text,
+                                                font: PageLayout.font(name: fontName, size: fontSize * 108 / Double(A4.width)),
+                                                documentURL: file.url,
+                                                imageSize: CGSize(width: (A4.width - 2 * CGFloat(margin)) * 108 / A4.width,
+                                                                  height: (A4.height - 2 * CGFloat(margin) - A4.footerSpace) * 108 / A4.width))
+                                                .allowsHitTesting(false)
+                                        } else {
+                                            Text(page.text.isEmpty ? " " : page.text)
+                                                .font(Font(PageLayout.font(name: fontName, size: fontSize * 108 / Double(A4.width))))
+                                                .foregroundStyle(ink.opacity(0.75))
+                                        }
+                                    }
                                         .padding(CGFloat(margin) * 108 / A4.width)
                                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                         .clipped()
@@ -730,8 +742,55 @@ struct WriterView: View {
         destination.takeFocus = takeFocus
         if takeFocus { preview = false }
         file.recordPosition(offset)
+        insertionSelection = NSRange(location: offset, length: 0)
         selectedPage = destination.pageIndex
         editorFocus = destination
+    }
+
+    private func applyInsertionDocument(_ text: String, selection: NSRange, undo: UndoManager?) {
+        let previous = document, previousSelection = insertionSelection
+        undo?.registerUndo(withTarget: file) { _ in
+            applyInsertionDocument(previous, selection: previousSelection, undo: undo)
+        }
+        undo?.setActionName("Insert Markdown")
+        document = text
+        insertionSelection = selection
+        preview = false
+        file.recordPosition(selection.location)
+        if let destination = PageLayout.caretDestination(selection, in: pages) {
+            selectedPage = destination.pageIndex
+            editorFocus = destination
+        }
+    }
+
+    private func insertMarkdown(_ command: String) {
+        if command == "image" { insertImage(); return }
+        let edit = MarkdownInsertion.edit(document, selection: insertionSelection, command: command)
+        let text = (document as NSString).replacingCharacters(in: edit.range, with: edit.text)
+        applyInsertionDocument(text, selection: edit.selection, undo: NSApp.keyWindow?.undoManager)
+    }
+
+    private func insertImage() {
+        guard file.url != nil || saveMarkdown(), let documentURL = file.url else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP, .bmp, .tiff]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.directoryURL = documentURL.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let imageURL = panel.url else { return }
+        let accessing = imageURL.startAccessingSecurityScopedResource()
+        defer { if accessing { imageURL.stopAccessingSecurityScopedResource() } }
+        guard NSImage(contentsOf: imageURL) != nil else {
+            fileError = "This image could not be opened."
+            return
+        }
+        let markdown = "\n" + MarkdownImage.markdown(imageURL, relativeTo: documentURL) + "\n"
+        let full = document as NSString
+        let location = min(insertionSelection.location, full.length)
+        let range = NSRange(location: location, length: min(insertionSelection.length, full.length - location))
+        applyInsertionDocument(full.replacingCharacters(in: range, with: markdown),
+                               selection: NSRange(location: location + (markdown as NSString).length, length: 0),
+                               undo: NSApp.keyWindow?.undoManager)
     }
 
     private func addPage() {
@@ -746,7 +805,9 @@ struct WriterView: View {
             paper
             Group {
                 if preview {
-                    MarkdownPagePreview(source: page.text, font: displayTypeface)
+                    MarkdownPagePreview(source: page.text, font: displayTypeface, documentURL: file.url,
+                                        imageSize: CGSize(width: (A4.width - 2 * CGFloat(margin)) * pageScale,
+                                                          height: (A4.height - 2 * CGFloat(margin) - A4.footerSpace) * pageScale))
                 } else {
                     PageTextEditor(text: page.text, font: displayTypeface,
                                    foreground: dark ? NSColor(white: 0.93, alpha: 1) : NSColor(white: 0.12, alpha: 1),
@@ -770,7 +831,8 @@ struct WriterView: View {
                                        return true
                                    }, onSelection: { selection in
                                        guard selection.location != NSNotFound else { return }
-                                       file.recordPosition(page.range.location + selection.location)
+                                       insertionSelection = NSRange(location: page.range.location + selection.location, length: selection.length)
+                                       file.recordPosition(insertionSelection.location)
                                    }) { replacement, selection, composing in
                         // Each visible page edits one range of the canonical Markdown string.
                         // Pagination recalculates immediately after every edit.
@@ -780,6 +842,7 @@ struct WriterView: View {
                         guard !composing, selection.location != NSNotFound else { return }
                         let globalSelection = NSRange(location: page.range.location + selection.location,
                                                       length: selection.length)
+                        insertionSelection = globalSelection
                         file.recordPosition(globalSelection.location)
                         if let destination = PageLayout.caretDestination(globalSelection, in: pages),
                            destination.pageIndex != page.index {
@@ -904,7 +967,7 @@ struct WriterView: View {
         do {
             let data = try WriterPDF.data(document: document, font: typeface, margin: CGFloat(margin),
                                           pageSize: CGSize(width: A4.width, height: A4.height),
-                                          footerSpace: A4.footerSpace)
+                                          footerSpace: A4.footerSpace, documentURL: file.url)
             try data.write(to: url, options: .atomic)
         } catch { fileError = error.localizedDescription }
     }

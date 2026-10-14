@@ -5,6 +5,8 @@ import AppKit
 struct MarkdownPagePreview: NSViewRepresentable {
     var source: String
     var font: NSFont
+    var documentURL: URL? = nil
+    var imageSize = CGSize(width: 467, height: 672)
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -28,7 +30,7 @@ struct MarkdownPagePreview: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let text = scroll.documentView as? CalloutTextView else { return }
-        let rendered = NSMutableAttributedString(attributedString: MarkdownPreview.native(source, font: font))
+        let rendered = NSMutableAttributedString(attributedString: MarkdownPreview.native(source, font: font, documentURL: documentURL, imageSize: imageSize))
         rendered.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: rendered.length)) { color, range, _ in
             if color == nil { rendered.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range) }
         }

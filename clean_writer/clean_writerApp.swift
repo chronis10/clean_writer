@@ -36,6 +36,7 @@ struct WriterFileActions {
     var findNext: () -> Void = {}
     var findPrevious: () -> Void = {}
     var toggleBookmark: () -> Void = {}
+    var insert: (String) -> Void = { _ in }
 }
 
 private struct WriterFileActionsKey: FocusedValueKey {
@@ -66,6 +67,12 @@ struct WriterFileCommands: Commands {
                     .keyboardShortcut("g", modifiers: [.command, .shift]).disabled(actions == nil)
             }
         }
+        CommandMenu("Insert") {
+            ForEach(MarkdownInsertEntry.menu) { entry in
+                MarkdownInsertMenuItem(entry: entry, insert: { actions?.insert($0) })
+            }
+            .disabled(actions == nil)
+        }
         CommandGroup(replacing: .newItem) {
             Button("New") { actions?.new() }
                 .disabled(actions == nil)
@@ -95,6 +102,22 @@ struct WriterFileCommands: Commands {
             Button("Export PDF…") { actions?.exportPDF() }
                 .disabled(actions == nil)
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+        }
+    }
+}
+
+private struct MarkdownInsertMenuItem: View {
+    var entry: MarkdownInsertEntry
+    var insert: (String) -> Void
+    var body: some View {
+        if let command = entry.command {
+            Button(entry.label) { insert(command) }
+        } else {
+            Menu(entry.label) {
+                ForEach(entry.children) { child in
+                    MarkdownInsertMenuItem(entry: child, insert: insert)
+                }
+            }
         }
     }
 }
