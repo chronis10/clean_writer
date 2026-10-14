@@ -5,18 +5,19 @@ import {
   EditorState,
   Compartment,
   StateField,
-  RangeSetBuilder,
+  StateEffect,
 } from "@codemirror/state";
 import {
   EditorView,
   keymap,
   drawSelection,
+  panels,
   Decoration,
-  WidgetType,
   type DecorationSet,
 } from "@codemirror/view";
 import {
   history,
+  isolateHistory,
   historyKeymap,
   defaultKeymap,
   indentWithTab,
@@ -46,16 +47,28 @@ import {
 } from "./model";
 import { paginate, stylePaper, fonts, type Page } from "./pages";
 import { resolveImages, type LoadedImage } from "./images";
+import { icon } from "./icons";
+import { findPanel } from "./find-panel";
+import { insertCommands, markdownInsertion } from "./insertions";
+import {
+  sourcePagination,
+  sourcePageAt,
+  PAGE_GAP,
+  type SourcePage,
+} from "./source-pages";
+import { PAGE_HEIGHT } from "./pages";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
-<aside id="sidebar"><div class="sidebar-heading"><span class="brand">Clean Writer</span><span class="edition">FOCUSED WRITING</span></div><div class="sidebar-label">PAGES <span id="sidebar-count">1</span></div><nav id="thumbnails" aria-label="Document pages"></nav><div class="sidebar-label">BOOKMARKS <button id="bookmark-add" title="Bookmark cursor (Ctrl/⌘D)" aria-label="Add bookmark">＋</button></div><nav id="bookmarks" aria-label="Bookmarks"></nav><button id="add-page" class="add-page">＋ Add page break</button></aside>
-<div class="workspace"><header class="toolbar"><button id="sidebar-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button><div class="document-title"><strong id="filename">Untitled.md</strong><span id="save-state">Loading…</span></div><div class="toolbar-actions"><button id="new" title="New (Ctrl/⌘N)">New</button><button id="open" title="Open (Ctrl/⌘O)">Open</button><button id="save" title="Save (Ctrl/⌘S)">Save</button><button id="more" aria-label="More file actions" aria-expanded="false">···</button><span class="divider"></span><button id="preview" title="Toggle Markdown preview" aria-pressed="false">Preview</button><button id="theme" title="Toggle dark appearance" aria-label="Toggle dark appearance">◐</button><button id="settings" title="Typography" aria-label="Typography settings">⚙</button></div></header>
-<div id="file-menu" class="popover" hidden><button id="save-as">Save As…</button><button id="export">Export PDF…</button><button id="insert-image">Insert image…</button><div class="menu-label">OPEN RECENT</div><div id="recent"></div></div>
-<div id="settings-panel" class="popover settings-panel" hidden><h2>Typography</h2><label>Font<select id="font"><option>Serif</option><option>Sans</option><option>Mono</option></select></label><label>Size <output id="size-value"></output><input id="size" type="range" min="10" max="28" step="1"></label><label>Margins <output id="margin-value"></output><input id="margin" type="range" min="24" max="100" step="4"></label></div>
-<div id="notice" role="status" hidden></div><main id="canvas" aria-label="Writing canvas"><div id="source-host"><article id="source-paper" class="paper source-paper"><div id="editor" aria-label="Markdown editor"></div><div class="source-caption">MARKDOWN SOURCE · CONTINUOUS EDITING</div></article></div><div id="preview-host" hidden></div></main>
-<footer class="statusbar"><div><span id="word-count">0 words</span><span class="status-separator">·</span><span id="page-count">1 page</span><span id="search-count" class="search-count" hidden></span><span id="mode-status" class="mode-status">Source</span></div><div class="zoom-controls"><button id="zoom-out" aria-label="Zoom out">−</button><input id="zoom" type="range" min="50" max="200" step="5" aria-label="Zoom"><button id="zoom-value" title="Reset zoom">100%</button><button id="zoom-in" aria-label="Zoom in">＋</button></div></footer></div>
+<aside id="sidebar"><div class="sidebar-label">PAGES</div><nav id="thumbnails" aria-label="Document pages"></nav><button id="add-page" class="add-page">${icon("plus")}<span>Add page</span></button></aside>
+<div class="workspace"><header class="toolbar"><button id="sidebar-toggle" title="Hide page sidebar" aria-label="Toggle page sidebar">${icon("sidebar")}</button><div class="document-title"><strong id="filename">Untitled.md</strong><span id="dirty-dot" hidden aria-label="Unsaved changes"></span><span id="save-state" class="sr-only">Loading…</span></div><div class="toolbar-actions"><button id="bookmark-add" title="Bookmark this page (Ctrl/⌘D)" aria-label="Toggle bookmark">${icon("bookmark")}</button><button id="find" title="Find in document (Ctrl/⌘F)" aria-label="Find in document">${icon("search")}</button><button id="preview" title="Preview Markdown" aria-label="Markdown preview" aria-pressed="false">${icon("eye")}</button><button id="theme" title="Switch to dark appearance" aria-label="Switch to dark appearance">${icon("moon")}</button><button id="settings" title="Settings" aria-label="Settings">${icon("gear")}</button></div></header>
+<div id="find-host"></div>
+<div id="file-menu" class="popover" hidden><button id="new">New</button><button id="open">Open</button><div id="recent"></div><button id="save">Save</button><button id="save-as">Save As…</button><button id="export">Export PDF…</button><button id="insert-image">Insert image…</button></div>
+<div id="bookmark-menu" class="popover" hidden></div>
+<div id="settings-panel" class="popover settings-panel" hidden><h2>Settings</h2><h3>Typography</h3><label>Font<select id="font"><option value="Serif">Serif</option><option value="Sans">Sans Serif</option><option value="Mono">Monospaced</option></select></label><label>Size<input id="size" type="range" min="11" max="22" step="1"><output id="size-value"></output></label><h3>Page margins</h3><label>Margin<select id="margin"><option value="45">Narrow — 45 pt</option><option value="64">Normal — 64 pt</option><option value="85">Wide — 85 pt</option></select><output id="margin-value" hidden></output></label><hr><p>Named files save automatically after a typing pause. Untitled drafts are recovered automatically; use File → Save to choose a location.</p></div>
+<div id="notice" role="status" hidden></div><main id="canvas" aria-label="Writing canvas"><div id="source-host"><article id="source-paper" class="source-paper"><div id="source-background" aria-hidden="true"></div><div id="editor" aria-label="Markdown editor"></div></article></div><div id="preview-host" hidden></div></main>
+<footer class="statusbar"><div><span id="word-count">0 words</span><span class="status-separator">·</span><span id="page-count">1 page</span><span id="search-count" class="search-count sr-only" hidden></span></div><div class="zoom-controls"><button id="zoom-out" aria-label="Zoom out">${icon("minusZoom")}</button><input id="zoom" type="range" min="50" max="200" step="10" aria-label="Page zoom"><button id="zoom-in" aria-label="Zoom in">${icon("plusZoom")}</button><button id="zoom-value" title="Reset zoom to 100%">100%</button></div></footer></div>
 <dialog id="confirm-dialog"><form method="dialog"><h2>Keep your changes?</h2><p id="confirm-message">Save this document before continuing, or discard its unsaved changes.</p><div class="dialog-actions"><button value="cancel">Cancel</button><button value="discard">Discard</button><button value="save" class="primary">Save</button></div></form></dialog>
 <dialog id="error-dialog"><form method="dialog"><h2>File operation failed</h2><p id="error-message"></p><div class="dialog-actions"><button class="primary">OK</button></div></form></dialog>`;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
@@ -74,6 +87,7 @@ let renderTimer: ReturnType<typeof setTimeout> | undefined,
   pages: Page[] = [],
   currentSection = 0,
   requestedOpen = false;
+let sourcePages: SourcePage[] = [{ from: 0, to: 0, section: 0 }];
 let recoveryFailed = false,
   autosaveBlocked = false;
 let tail: Promise<unknown> = Promise.resolve();
@@ -91,18 +105,18 @@ const editorTheme = () =>
     {
       "&": {
         fontFamily: fonts[prefs.font],
-        fontSize: `${prefs.size}pt`,
+        fontSize: `${prefs.size}px`,
         backgroundColor: "transparent",
       },
       ".cm-content": {
         padding: "0",
-        minHeight: "920px",
+        minHeight: "0",
         caretColor: "var(--ink)",
       },
       ".cm-scroller": {
         overflow: "visible",
         fontFamily: "inherit",
-        lineHeight: "1.6",
+        lineHeight: "1.2",
       },
       ".cm-line": { padding: "0" },
       ".cm-focused": { outline: "none" },
@@ -111,37 +125,35 @@ const editorTheme = () =>
     },
     { dark: prefs.dark },
   );
-class PageBreak extends WidgetType {
-  toDOM() {
-    const el = document.createElement("span");
-    el.className = "manual-break";
-    el.textContent = "— Page break —";
-    return el;
-  }
-}
+const pageLayoutEffect = StateEffect.define<DecorationSet>();
 const breaks = StateField.define<DecorationSet>({
-  create(state) {
-    return breakDecorations(state);
+  create() {
+    return Decoration.none;
   },
   update(value, transaction) {
-    return transaction.docChanged ? breakDecorations(transaction.state) : value;
+    for (const effect of transaction.effects)
+      if (effect.is(pageLayoutEffect)) return effect.value;
+    return value.map(transaction.changes);
   },
   provide: (field) => EditorView.decorations.from(field),
 });
-function breakDecorations(state: EditorState): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
-  const text = state.doc.toString();
-  for (
-    let position = text.indexOf("\f");
-    position >= 0;
-    position = text.indexOf("\f", position + 1)
-  )
-    builder.add(
-      position,
-      position + 1,
-      Decoration.replace({ widget: new PageBreak() }),
-    );
-  return builder.finish();
+function layoutSource() {
+  const layout = sourcePagination(doc.text, prefs);
+  sourcePages = layout.pages;
+  editor.dispatch({ effects: pageLayoutEffect.of(layout.decorations) });
+  const backgrounds = sourcePages.map((_, index) => {
+    const paper = document.createElement("div");
+    paper.className = "paper source-page-background";
+    paper.style.top = `${index * (PAGE_HEIGHT + PAGE_GAP)}px`;
+    const number = document.createElement("div");
+    number.className = "page-number";
+    number.textContent = String(index + 1);
+    paper.append(number);
+    return paper;
+  });
+  $("source-background").replaceChildren(...backgrounds);
+  $("source-paper").style.minHeight =
+    `${sourcePages.length * PAGE_HEIGHT + (sourcePages.length - 1) * PAGE_GAP}px`;
 }
 function editorState() {
   return EditorState.create({
@@ -151,7 +163,8 @@ function editorState() {
       history(),
       drawSelection(),
       markdown(),
-      search({ top: true }),
+      search({ top: true, createPanel: findPanel }),
+      panels({ topContainer: $("find-host") }),
       breaks,
       EditorView.lineWrapping,
       EditorView.contentAttributes.of({
@@ -184,6 +197,7 @@ function editorState() {
         }
         if (update.selectionSet || update.docChanged) {
           doc.cursor = update.state.selection.main.head;
+          updateBookmarks();
           scheduleRecovery();
         }
       }),
@@ -233,6 +247,7 @@ async function run(job: () => Promise<unknown>) {
     updateStatus();
     if (requestedOpen) {
       requestedOpen = false;
+      let sourcePages: SourcePage[] = [{ from: 0, to: 0, section: 0 }];
       void run(() => replaceDocument("open_requested"));
     }
   }
@@ -313,9 +328,10 @@ function updateStatus() {
             ? "Saved"
             : "Local draft";
   $("save-state").classList.toggle("unsaved", dirty());
+  $("dirty-dot").hidden = !dirty();
   for (const id of ["new", "open", "save", "save-as", "export", "insert-image"])
     $<HTMLButtonElement>(id).disabled = busy || !ready;
-  document.title = `${dirty() ? "• " : ""}${fileName(doc.path)} — Clean Writer`;
+  document.title = `Clean Writer - ${fileName(doc.path)}`;
   if (desktop)
     void getCurrentWindow()
       .setTitle(document.title)
@@ -325,17 +341,30 @@ function updateSettings() {
   document.documentElement.dataset.theme = prefs.dark ? "dark" : "light";
   app.classList.toggle("hide-sidebar", !prefs.sidebar);
   $("preview").setAttribute("aria-pressed", String(prefs.preview));
-  $("preview").textContent = prefs.preview ? "Source" : "Preview";
+  $("preview").title = prefs.preview
+    ? "Edit Markdown source"
+    : "Preview Markdown";
+  $("theme").innerHTML = icon(prefs.dark ? "sun" : "moon");
+  $("theme").title = prefs.dark
+    ? "Switch to light appearance"
+    : "Switch to dark appearance";
+  $("theme").setAttribute("aria-label", $("theme").title);
+  $("sidebar-toggle").title = prefs.sidebar
+    ? "Hide page sidebar"
+    : "Show page sidebar";
   $("source-host").hidden = prefs.preview;
   $("preview-host").hidden = !prefs.preview;
-  $("mode-status").textContent = prefs.preview ? "Preview" : "Source";
+
   $<HTMLSelectElement>("font").value = prefs.font;
   $<HTMLInputElement>("size").value = String(prefs.size);
-  $<HTMLInputElement>("margin").value = String(prefs.margin);
+  $<HTMLSelectElement>("margin").value = String(prefs.margin);
   $("size-value").textContent = `${prefs.size} pt`;
   $("margin-value").textContent = `${prefs.margin} pt`;
   $<HTMLInputElement>("zoom").value = String(Math.round(prefs.zoom * 100));
   $("zoom-value").textContent = `${Math.round(prefs.zoom * 100)}%`;
+  // Thumbnails live outside the document hosts, so share typography explicitly.
+  // Keep their scale fixed while the main document zooms independently.
+  stylePaper($("thumbnails"), prefs);
   for (const host of [$("source-host"), $("preview-host")]) {
     stylePaper(host, prefs);
     host.style.zoom = String(prefs.zoom);
@@ -425,7 +454,14 @@ async function replaceDocument(
     editor.focus();
   }
 }
+let recentMenuUpdate: Promise<unknown> = Promise.resolve();
 function updateRecent() {
+  if (desktop) {
+    const paths = [...recent];
+    recentMenuUpdate = recentMenuUpdate
+      .then(() => api("update_recent_menu", { paths }))
+      .catch((error) => notice(`Open Recent could not be updated: ${error}`));
+  }
   $("recent").replaceChildren();
   if (!recent.length) {
     const label = document.createElement("span");
@@ -445,32 +481,32 @@ function updateRecent() {
   }
 }
 function updateBookmarks() {
-  $("bookmarks").replaceChildren();
-  if (!doc.bookmarks.length) {
-    const el = document.createElement("p");
-    el.className = "empty-label";
-    el.textContent = "Mark a place to return to";
-    $("bookmarks").append(el);
-  }
-  for (const mark of doc.bookmarks) {
-    const row = document.createElement("div");
-    row.className = "bookmark-row";
-    const button = document.createElement("button");
-    button.textContent = `◆ ${mark.title}`;
-    button.title = "Jump to bookmark";
-    button.onclick = () => jump(mark.offset);
-    const remove = document.createElement("button");
-    remove.textContent = "×";
-    remove.title = "Remove bookmark";
-    remove.setAttribute("aria-label", `Remove bookmark ${mark.title}`);
-    remove.onclick = () => {
-      doc.bookmarks = doc.bookmarks.filter((b) => b.id !== mark.id);
-      updateBookmarks();
-      scheduleRecovery();
-    };
-    row.append(button, remove);
-    $("bookmarks").append(row);
-  }
+  const index = sourcePageAt(sourcePages, doc.cursor);
+  const marked = doc.bookmarks.some(
+    (mark) => sourcePageAt(sourcePages, mark.offset) === index,
+  );
+  $("bookmark-add").classList.toggle("bookmarked", marked);
+  $("bookmark-add").title = marked
+    ? "Remove this page's bookmark (Ctrl/⌘D)"
+    : "Bookmark this page at the cursor (Ctrl/⌘D)";
+  $("thumbnails")
+    .querySelectorAll<HTMLElement>(".thumbnail")
+    .forEach((button, pageIndex) => {
+      button.classList.toggle("active", pageIndex === index);
+      button.querySelector(".thumbnail-bookmark")?.remove();
+      if (
+        doc.bookmarks.some(
+          (mark) => sourcePageAt(sourcePages, mark.offset) === pageIndex,
+        )
+      ) {
+        const marker = document.createElement("span");
+        marker.className = "thumbnail-bookmark";
+        marker.innerHTML = icon("bookmark");
+        marker.title = "Bookmarked page";
+        marker.setAttribute("aria-label", "Bookmarked page");
+        button.querySelector(".mini-paper")?.append(marker);
+      }
+    });
 }
 function jump(offset: number) {
   if (prefs.preview) changeSettings({ preview: false }, false);
@@ -482,9 +518,14 @@ function jump(offset: number) {
 }
 function bookmark() {
   const offset = editor.state.selection.main.head;
-  const found = doc.bookmarks.find((b) => b.offset === offset);
+  const pageIndex = sourcePageAt(sourcePages, offset);
+  const found = doc.bookmarks.some(
+    (b) => sourcePageAt(sourcePages, b.offset) === pageIndex,
+  );
   doc.bookmarks = found
-    ? doc.bookmarks.filter((b) => b !== found)
+    ? doc.bookmarks.filter(
+        (b) => sourcePageAt(sourcePages, b.offset) !== pageIndex,
+      )
     : [
         ...doc.bookmarks,
         {
@@ -533,7 +574,29 @@ function imageLoader(documentPath: string | null, fresh = false) {
     return image;
   };
 }
+function insertMarkdown(command: string) {
+  if (!ready || busy) return;
+  if (prefs.preview) changeSettings({ preview: false }, false);
+  const selected = editor.state.selection.main;
+  const insertion = markdownInsertion(
+    doc.text,
+    selected.from,
+    selected.to,
+    command,
+  );
+  editor.dispatch({
+    changes: { from: insertion.from, to: insertion.to, insert: insertion.text },
+    selection: { anchor: insertion.anchor, head: insertion.head },
+    scrollIntoView: true,
+    annotations: isolateHistory.of("full"),
+  });
+  editor.focus();
+}
 async function insertImage() {
+  if (!doc.path) {
+    notice("Save this Markdown file first so the image path can be relative.");
+    if (!(await save(false))) return;
+  }
   const markdown = await api<string | null>("pick_image");
   if (!markdown) return;
   if (prefs.preview) changeSettings({ preview: false }, false);
@@ -542,10 +605,13 @@ async function insertImage() {
   editor.dispatch({
     changes: { from: selected.from, to: selected.to, insert: insertion },
     selection: { anchor: selected.from + insertion.length },
+    annotations: isolateHistory.of("full"),
   });
   editor.focus();
 }
 async function render(generation: number) {
+  layoutSource();
+  updateThumbnails();
   if (!desktop) {
     $("word-count").textContent =
       `${doc.text.trim() ? doc.text.trim().split(/\s+/).length : 0} words`;
@@ -578,55 +644,72 @@ async function render(generation: number) {
   pages = next;
   $("word-count").textContent =
     `${result.words.toLocaleString()} ${result.words === 1 ? "word" : "words"}`;
+  updateThumbnails();
+}
+function updateThumbnails() {
   $("page-count").textContent =
-    `${pages.length} ${pages.length === 1 ? "page" : "pages"}`;
-  $("sidebar-count").textContent = String(pages.length);
+    `${sourcePages.length} ${sourcePages.length === 1 ? "page" : "pages"}`;
   $("thumbnails").replaceChildren();
-  pages.forEach((page, index) => {
+  sourcePages.forEach((page, index) => {
     const button = document.createElement("button");
     button.className = "thumbnail";
     button.setAttribute("aria-label", `Go to page ${index + 1}`);
     const mini = document.createElement("div");
     mini.className = "mini-paper";
-    mini.textContent = page.excerpt;
-    const pageImage = page.element.querySelector<HTMLImageElement>("img");
-    if (pageImage) {
-      const thumbnail = pageImage.cloneNode() as HTMLImageElement;
-      thumbnail.removeAttribute("width");
-      thumbnail.removeAttribute("height");
-      mini.prepend(thumbnail);
-    }
+    const excerpt = document.createElement("div");
+    excerpt.className = "mini-text";
+    excerpt.textContent = doc.text.slice(page.from, page.to) || " ";
+    mini.append(excerpt);
+    const badges = document.createElement("span");
+    badges.className = "thumbnail-badges";
+    const pageText = doc.text.slice(page.from, page.to);
+    for (const kind of ["note", "todo"])
+      if (new RegExp(`\\[!${kind.toUpperCase()}\\]`).test(pageText)) {
+        const badge = document.createElement("span");
+        badge.className = kind;
+        badge.innerHTML = icon(kind);
+        badge.title = kind === "note" ? "Contains notes" : "Contains to-dos";
+        badges.append(badge);
+      }
+    if (badges.childNodes.length) mini.append(badges);
     const label = document.createElement("span");
     label.textContent = String(index + 1);
     button.append(mini, label);
-    const badges = document.createElement("span");
-    badges.className = "thumbnail-badges";
-    for (const kind of ["note", "todo"])
-      if (page.element.querySelector(`.callout.${kind}`)) {
-        const badge = document.createElement("span");
-        badge.className = kind;
-        badge.textContent = kind === "note" ? "Note" : "Todo";
-        badges.append(badge);
-      }
-    if (badges.childNodes.length) button.append(badges);
     button.onclick = () => {
       currentSection = page.section;
-      if (prefs.preview)
-        page.element.scrollIntoView({ behavior: "smooth", block: "start" });
-      else {
-        const offset = doc.text
-          .split("\f")
-          .slice(0, currentSection)
-          .reduce((n, s) => n + s.length + 1, 0);
-        jump(offset);
+      const mark = doc.bookmarks.find(
+        (b) => sourcePageAt(sourcePages, b.offset) === index,
+      );
+      if (mark || !prefs.preview) jump(mark?.offset ?? page.from);
+      else
+        (
+          pages.find((p) => p.section === page.section) || pages[index]
+        )?.element.scrollIntoView({ block: "start" });
+    };
+    button.oncontextmenu = (event) => {
+      const marks = doc.bookmarks.filter(
+        (b) => sourcePageAt(sourcePages, b.offset) === index,
+      );
+      if (!marks.length) return;
+      event.preventDefault();
+      const menu = $("bookmark-menu");
+      menu.replaceChildren();
+      for (const mark of marks) {
+        const remove = document.createElement("button");
+        remove.textContent = "Remove Bookmark";
+        remove.onclick = () => {
+          doc.bookmarks = doc.bookmarks.filter((b) => b.id !== mark.id);
+          menu.hidden = true;
+          updateBookmarks();
+          scheduleRecovery();
+        };
+        menu.append(remove);
       }
-      $("thumbnails")
-        .querySelectorAll(".active")
-        .forEach((el) => el.classList.remove("active"));
-      button.classList.add("active");
+      menu.hidden = false;
     };
     $("thumbnails").append(button);
   });
+  updateBookmarks();
 }
 async function exportPDF() {
   if (exporting) return;
@@ -685,8 +768,8 @@ async function exportPDF() {
 }
 function hidePopovers() {
   $("file-menu").hidden = true;
+  $("bookmark-menu").hidden = true;
   $("settings-panel").hidden = true;
-  $("more").setAttribute("aria-expanded", "false");
 }
 async function closeApp() {
   await checkpoint();
@@ -705,6 +788,17 @@ const actions: Record<string, () => Promise<unknown>> = {
 };
 const menuActions: Record<string, () => Promise<unknown>> = {
   ...actions,
+  ...Object.fromEntries(
+    insertCommands()
+      .filter((command) => command !== "image" && command !== "page-break")
+      .map((command) => [
+        `insert-${command}`,
+        async () => insertMarkdown(command),
+      ]),
+  ),
+  "insert-page-break": async () => {
+    if (ready && !busy) addPage();
+  },
   quit: closeApp,
   undo: async () => undo(editor),
   redo: async () => redo(editor),
@@ -718,12 +812,6 @@ for (const [id, action] of Object.entries(actions))
     hidePopovers();
     void run(action);
   };
-$("more").onclick = () => {
-  const hidden = $("file-menu").hidden;
-  hidePopovers();
-  $("file-menu").hidden = !hidden;
-  $("more").setAttribute("aria-expanded", String(hidden));
-};
 $("settings").onclick = () => {
   const hidden = $("settings-panel").hidden;
   hidePopovers();
@@ -737,10 +825,14 @@ $("preview").onclick = () => {
   if (!prefs.preview) editor.focus();
 };
 $("bookmark-add").onclick = bookmark;
+$("find").onclick = () => {
+  if (prefs.preview) changeSettings({ preview: false }, false);
+  openSearchPanel(editor);
+};
 $("add-page").onclick = addPage;
 $<HTMLSelectElement>("font").onchange = (e) =>
   changeSettings({ font: (e.target as HTMLSelectElement).value });
-for (const key of ["size", "margin"] as const)
+for (const key of ["size"] as const)
   $<HTMLInputElement>(key).oninput = (e) =>
     changeSettings({ [key]: Number((e.target as HTMLInputElement).value) });
 $<HTMLInputElement>("zoom").oninput = (e) =>
@@ -748,11 +840,13 @@ $<HTMLInputElement>("zoom").oninput = (e) =>
     { zoom: Number((e.target as HTMLInputElement).value) / 100 },
     false,
   );
+$<HTMLSelectElement>("margin").onchange = (e) =>
+  changeSettings({ margin: Number((e.target as HTMLSelectElement).value) });
 $("zoom-value").onclick = () => changeSettings({ zoom: 1 }, false);
 $("zoom-in").onclick = () => changeSettings({ zoom: prefs.zoom + 0.1 }, false);
 $("zoom-out").onclick = () => changeSettings({ zoom: prefs.zoom - 0.1 }, false);
 document.addEventListener("click", (e) => {
-  if (!(e.target as HTMLElement).closest(".popover,#more,#settings"))
+  if (!(e.target as HTMLElement).closest(".popover,#settings,.thumbnail"))
     hidePopovers();
 });
 $("preview-host").addEventListener("click", (e) => {
@@ -771,7 +865,7 @@ window.addEventListener(
     }
     if (!(e.metaKey || e.ctrlKey)) return;
     const key = e.key.toLowerCase();
-    if (key === "s" && e.altKey) {
+    if (key === "s" && (e.altKey || (e.ctrlKey && e.metaKey))) {
       e.preventDefault();
       changeSettings({ sidebar: !prefs.sidebar }, false);
       return;
@@ -839,6 +933,11 @@ async function start() {
         else void run(() => replaceDocument("open_requested"));
       });
       await listen<string>("file-action", (event) => {
+        if (event.payload.startsWith("recent-")) {
+          const path = recent[Number(event.payload.slice(7))];
+          if (path) void run(() => replaceDocument("open_recent", { path }));
+          return;
+        }
         const action = menuActions[event.payload];
         if (action) {
           if (actions[event.payload] || event.payload === "quit")
@@ -863,7 +962,6 @@ async function start() {
     applySnapshot(snapshot);
     ready = true;
     updateStatus();
-    if (dirty()) notice("Your unsaved draft has been restored.");
     if (!desktop)
       notice(
         "Browser layout preview. Native files, Rust Markdown rendering, and PDF export are available in the desktop app.",

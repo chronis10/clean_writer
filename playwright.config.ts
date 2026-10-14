@@ -4,6 +4,7 @@ export default defineConfig({
   fullyParallel: true,
   use: {
     baseURL: "http://127.0.0.1:1420",
+    deviceScaleFactor: 2,
     viewport: { width: 1280, height: 900 },
   },
   webServer: {

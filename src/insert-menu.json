@@ -1,0 +1,172 @@
+[
+  {
+    "label": "Heading",
+    "items": [
+      {
+        "label": "Heading 1 (#)",
+        "id": "heading-1"
+      },
+      {
+        "label": "Heading 2 (##)",
+        "id": "heading-2"
+      },
+      {
+        "label": "Heading 3 (###)",
+        "id": "heading-3"
+      },
+      {
+        "label": "Heading 4 (####)",
+        "id": "heading-4"
+      },
+      {
+        "label": "Heading 5 (#####)",
+        "id": "heading-5"
+      },
+      {
+        "label": "Heading 6 (######)",
+        "id": "heading-6"
+      },
+      {
+        "label": "Underline Heading 1 (=)",
+        "id": "setext-1"
+      },
+      {
+        "label": "Underline Heading 2 (-)",
+        "id": "setext-2"
+      }
+    ]
+  },
+  {
+    "label": "Text Style",
+    "items": [
+      {
+        "label": "Bold (**text**)",
+        "id": "bold"
+      },
+      {
+        "label": "Italic (*text*)",
+        "id": "italic"
+      },
+      {
+        "label": "Bold Italic (***text***)",
+        "id": "bold-italic"
+      },
+      {
+        "label": "Strikethrough (~~text~~)",
+        "id": "strike"
+      },
+      {
+        "label": "Inline Code (`code`)",
+        "id": "inline-code"
+      },
+      {
+        "label": "Literal / Escaped Punctuation",
+        "id": "escape"
+      }
+    ]
+  },
+  {
+    "label": "List",
+    "items": [
+      {
+        "label": "Bulleted List (-)",
+        "id": "bullet"
+      },
+      {
+        "label": "Numbered List (1.)",
+        "id": "numbered"
+      },
+      {
+        "label": "Task List (- [ ])",
+        "id": "task"
+      },
+      {
+        "label": "Completed Task (- [x])",
+        "id": "checked-task"
+      },
+      {
+        "label": "Nested Bulleted List",
+        "id": "nested-bullet"
+      },
+      {
+        "label": "Nested Numbered List",
+        "id": "nested-numbered"
+      }
+    ]
+  },
+  {
+    "label": "Quote",
+    "items": [
+      {
+        "label": "Block Quote (>)",
+        "id": "quote"
+      },
+      {
+        "label": "Nested Quote (> >)",
+        "id": "nested-quote"
+      }
+    ]
+  },
+  {
+    "label": "Code Block",
+    "items": [
+      {
+        "label": "Fenced Code Block (```)",
+        "id": "code-block"
+      },
+      {
+        "label": "Indented Code Block",
+        "id": "indented-code"
+      }
+    ]
+  },
+  {
+    "label": "Link",
+    "items": [
+      {
+        "label": "Link\u2026",
+        "id": "link"
+      },
+      {
+        "label": "Reference Link\u2026",
+        "id": "reference-link"
+      },
+      {
+        "label": "Automatic URL Link\u2026",
+        "id": "autolink"
+      },
+      {
+        "label": "Email Link\u2026",
+        "id": "email-link"
+      }
+    ]
+  },
+  {
+    "label": "Image\u2026",
+    "id": "image"
+  },
+  {
+    "label": "Table",
+    "id": "table"
+  },
+  {
+    "label": "Horizontal Rule (---)",
+    "id": "rule"
+  },
+  {
+    "label": "Note ([!NOTE])",
+    "id": "note"
+  },
+  {
+    "label": "To-do ([!TODO])",
+    "id": "todo"
+  },
+  {
+    "label": "Line Break",
+    "id": "line-break"
+  },
+  {
+    "label": "Page Break",
+    "id": "page-break"
+  }
+]

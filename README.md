@@ -10,13 +10,13 @@ This branch is the cross-platform 2.0 development version. The existing 1.x GitH
 
 ## Features
 
-- Continuous Markdown source editing with undo/redo, cross-document selection within a file, search, and line wrapping.
-- Local and web images in preview, thumbnails, and PDF export, with an Insert image file picker.
+- A4 source pages with the Swift app’s 595.28 × 841.89-point canvas, neutral light/dark appearance, 192-point sidebar, icon toolbar, and footer. One CodeMirror document keeps undo/redo, selection across pages, search, and line wrapping.
+- Local and web images in preview, thumbnails, and PDF export, with an Insert → Image file picker and relative paths.
 - Formatted A4 preview with automatic pagination, page numbers, thumbnails, and manual page breaks.
 - Headings, emphasis, strikethrough, code, links, tables, nested lists, quotes, and task lists.
 - Blue `[!NOTE]` and amber `[!TODO]` callouts. Quoted and bare markers are supported; markers inside code stay literal.
-- New, Open, Open Recent, Save, Save As, and Export PDF through native menus and toolbar controls.
-- One-second autosave for named documents, draft recovery, per-file cursor positions, and bookmarks that follow edits.
+- New, Open, Open Recent, Save, Save As, and Export PDF through native File menus.
+- One-second autosave, draft recovery, per-file cursor positions, and bookmarks that follow edits. A small bookmark symbol appears at the top-left of page thumbnails; note/todo symbols stay bottom-right. Toggle a bookmark from any row on its page.
 - Safe file replacement and external-change detection. A failed save retains your recovery copy; use Save As if another editor changed the file.
 - Light/dark appearance, serif/sans/monospaced fonts, font size, margins, sidebar visibility, and 50–200% zoom.
 - Markdown file associations in installers, command-line file opening, and a single desktop instance.
@@ -77,31 +77,41 @@ On Windows, ensure `%USERPROFILE%\.cargo\bin` is on `PATH` and restart your term
 npm run desktop:build
 ```
 
-Output is under `src-tauri/target/release/bundle/`. Build on the target operating system: Windows installers on Windows, macOS bundles/DMGs on macOS, and Linux packages on Linux. The GitHub Actions workflow builds all three and uploads artifacts; it does not publish releases. Builds are unsigned unless signing is configured separately. The macOS CI job builds the runner's architecture, not a universal Intel/Apple Silicon binary.
+Output is under `src-tauri/target/release/bundle/`. Build on the target operating system: Windows installers on Windows, macOS bundles/DMGs on macOS, and Linux packages on Linux. The GitHub Actions workflow checks and builds all three platforms. Pushing a `v2.*` tag also publishes the installers and SHA-256 checksums to GitHub Releases; tags containing a hyphen are marked as prereleases. Builds are unsigned unless signing is configured separately. The macOS CI job builds the runner's architecture, not a universal Intel/Apple Silicon binary.
+
+## Insert menu
+
+Use **Insert** to add supported Markdown without memorizing its syntax. It offers all six headings and underline-style headings, bold/italic/bold italic/strikethrough, inline and block code, escaped punctuation, bulleted/numbered/nested lists, pending/completed tasks, quotes/nested quotes, links/reference links/automatic URL and email links, images, aligned tables, horizontal rules, notes, todos, line breaks, and page breaks.
+
+Inline formatting wraps selected text. Headings and lists format the current or selected lines. With no content selected, commands insert a template and select its editable placeholder. Each insertion can be undone normally.
+
+**Insert → Image…** opens the native file browser in the Markdown file’s folder. Save an untitled document first; canceling the save or image picker leaves the text unchanged. Images beside the document use a filename such as `photo.png`; images in subfolders use `images/photo.png`; images in sibling folders use `../assets/photo.png`. Spaces and special characters are URL-encoded. The image file stays in its original location. On Windows, an image on another drive falls back to a file URL because a relative path cannot cross drives.
+
+Keep the `.md` file and its image folders together when sharing or moving the document. Renaming or moving an image without updating its Markdown path makes that image unavailable.
 
 ## Keyboard shortcuts
 
 Use **Ctrl** on Windows/Linux and **⌘** on macOS.
 
-| Action | Shortcut |
-| --- | --- |
-| New | Ctrl/⌘N |
-| Open | Ctrl/⌘O |
-| Save | Ctrl/⌘S |
-| Save As | Ctrl/⌘Shift+S |
-| Export PDF | Ctrl/⌘Shift+E |
-| Find | Ctrl/⌘F |
-| Next / previous match | Ctrl/⌘G / Ctrl/⌘Shift+G |
-| Toggle bookmark at cursor | Ctrl/⌘D |
-| Toggle sidebar | Ctrl/⌘Alt+S |
-| Undo / redo | Ctrl/⌘Z / Ctrl/⌘Shift+Z |
-| Quit | Ctrl/⌘Q |
+| Action                       | Shortcut                |
+| ---------------------------- | ----------------------- |
+| New                          | Ctrl/⌘N                 |
+| Open                         | Ctrl/⌘O                 |
+| Save                         | Ctrl/⌘S                 |
+| Save As                      | Ctrl/⌘Shift+S           |
+| Export PDF                   | Ctrl/⌘Shift+E           |
+| Find                         | Ctrl/⌘F                 |
+| Next / previous match        | Ctrl/⌘G / Ctrl/⌘Shift+G |
+| Toggle current page bookmark | Ctrl/⌘D                 |
+| Toggle sidebar               | Ctrl/⌘Alt+S             |
+| Undo / redo                  | Ctrl/⌘Z / Ctrl/⌘Shift+Z |
+| Quit                         | Ctrl/⌘Q                 |
 
 Use the zoom slider, Ctrl+wheel/trackpad pinch, or click the zoom percentage to reset to 100%. Preview is read-only; edit task-list markers in source to complete tasks.
 
 ## Documents and recovery
 
-Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and appear as a labelled divider in source mode. Automatic A4 pagination affects preview and PDF, not the saved Markdown.
+Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and create a new A4 source page. Automatic A4 page spaces in source, preview, and PDF do not change the saved Markdown.
 
 Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Close/quit flushes recovery; named documents also save when possible. Abrupt process termination can lose edits made since the last completed checkpoint.
 
@@ -127,13 +137,13 @@ Images are limited to 16 MB per file/download and 8192 pixels per dimension; lar
 
 ## Current differences and limits
 
-- Source editing is continuous on a paper-width canvas. Preview and PDF use separate A4 pages; source thumbnails jump to the corresponding manual section.
+- Source pagination measures Markdown source rows; formatted preview/PDF can have a different page count. Page thumbnails represent source pages and jump to their source position or bookmark.
 - PDF pages are high-resolution images of the formatted layout, including Unicode and page numbers. Exported text is **not selectable/searchable**, and long PDFs can be large. This differs from the previous native text PDF exporter.
 - Fonts and webview text metrics can differ between operating systems. Long blocks flow across pages; unusual oversized non-text content may require smaller fonts or margins.
 - HTML is displayed as literal text. No mathematical formulas, syntax colouring, or footnotes are provided.
 - Webview spelling assistance depends on the operating system; native macOS automatic correction parity is not guaranteed.
 - Files must be UTF-8 and at most 20 MB when opened. Very long documents may take time to paginate or export.
-- Windows/macOS installers require their respective build/test environments. Local verification of this branch is on Linux; CI configuration does not itself prove a successful build on those systems.
+- Installers require their respective build/test environments. UI and backend checks on one platform do not prove installer behavior on other operating systems.
 
 ## Checks
 

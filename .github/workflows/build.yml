@@ -1,7 +1,8 @@
 name: Build desktop apps
 on:
   push:
-    branches: [main, rust]
+    branches: [rust]
+    tags: ["v2.*"]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -15,6 +16,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -56,3 +59,31 @@ jobs:
             src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v2.')
+    needs: desktop
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Publish downloadable installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p publish
+          find release-assets -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} publish/ \;
+          test -n "$(find publish -type f -print -quit)"
+          (cd publish && sha256sum * > SHA256SUMS.txt)
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            args=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease --latest=false); fi
+            gh release create "$RELEASE_TAG" --verify-tag --title "Clean Writer $RELEASE_TAG (Rust)" --generate-notes "${args[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" publish/* --clobber

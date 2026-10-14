@@ -53,8 +53,15 @@ export function preferences(value: Partial<Preferences>): Preferences {
     font: ["Serif", "Sans", "Mono"].includes(value.font ?? "")
       ? value.font!
       : "Serif",
-    size: number(value.size, 15, 10, 28),
-    margin: number(value.margin, 64, 24, 100),
+    size: number(value.size, 15, 11, 22),
+    margin: [45, 64, 85].reduce(
+      (nearest, candidate) =>
+        Math.abs(candidate - number(value.margin, 64, 45, 85)) <
+        Math.abs(nearest - number(value.margin, 64, 45, 85))
+          ? candidate
+          : nearest,
+      64,
+    ),
     zoom: number(value.zoom, 1, 0.5, 2),
   };
 }

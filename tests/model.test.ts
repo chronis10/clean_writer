@@ -27,7 +27,7 @@ describe("document anchors use UTF-16 like the Swift app", () => {
 it("validates persisted preferences", () => {
   expect(
     preferences({ zoom: 100, size: NaN, margin: -10, font: "Missing" }),
-  ).toMatchObject({ zoom: 2, size: 15, margin: 24, font: "Serif" });
+  ).toMatchObject({ zoom: 2, size: 15, margin: 45, font: "Serif" });
 });
 it("recognizes filenames on every platform", () => {
   expect(fileName("C:\\Notes\\draft.md")).toBe("draft.md");

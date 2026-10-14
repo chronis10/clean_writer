@@ -1,11 +1,12 @@
 import DOMPurify from "dompurify";
 import type { Preferences } from "./model";
-export const PAGE_WIDTH = 794,
-  PAGE_HEIGHT = 1123;
+export const PAGE_WIDTH = 595.28,
+  PAGE_HEIGHT = 841.89;
 export const fonts: Record<string, string> = {
-  Serif: 'Georgia, "Times New Roman", serif',
-  Sans: "Arial, Helvetica, sans-serif",
-  Mono: '"Courier New", monospace',
+  Serif:
+    '"New York", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  Sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  Mono: '"SFMono-Regular", Menlo, Consolas, monospace',
 };
 export interface Page {
   element: HTMLElement;
@@ -14,8 +15,8 @@ export interface Page {
 }
 export function stylePaper(element: HTMLElement, prefs: Preferences) {
   element.style.setProperty("--document-font", fonts[prefs.font]);
-  element.style.setProperty("--document-size", `${prefs.size}pt`);
-  element.style.setProperty("--document-margin", `${(prefs.margin * 4) / 3}px`);
+  element.style.setProperty("--document-size", `${prefs.size}px`);
+  element.style.setProperty("--document-margin", `${prefs.margin}px`);
 }
 // Clone a formatted block at a text offset, preserving its nested inline structure.
 function fragments(
