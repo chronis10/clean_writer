@@ -48,6 +48,13 @@ jobs:
           npm run test:ui
       - name: Build installers
         run: npm run desktop:build
+      - name: Package macOS app bundle
+        if: runner.os == 'macOS'
+        run: |
+          app="src-tauri/target/release/bundle/macos/Clean Writer.app"
+          archive="src-tauri/target/release/bundle/Clean-Writer-2.0.0-macOS-arm64-app.zip"
+          test -d "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
       - uses: actions/upload-artifact@v4
         with:
           name: clean-writer-${{ runner.os }}
@@ -58,6 +65,7 @@ jobs:
             src-tauri/target/release/bundle/**/*.msi
             src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.app.zip
           if-no-files-found: error
 
   release:
@@ -78,7 +86,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           mkdir -p publish
-          find release-assets -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} publish/ \;
+          find release-assets -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.app.zip' \) -exec cp {} publish/ \;
           test -n "$(find publish -type f -print -quit)"
           (cd publish && sha256sum * > SHA256SUMS.txt)
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
