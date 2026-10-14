@@ -153,7 +153,7 @@ test("editing, bookmarks, manual pages, and recovery", async ({ page }) => {
   await expect(page.locator(".thumbnail")).toHaveCount(2);
   await page.locator("#preview").click();
   await expect(page.locator("#preview-host")).toBeVisible();
-  await page.locator(".thumbnail").first().click();
+  await page.locator(".thumbnail-bookmark").click();
   await expect(page.locator("#preview")).toHaveAttribute(
     "aria-pressed",
     "false",
