@@ -77,7 +77,7 @@ On Windows, ensure `%USERPROFILE%\.cargo\bin` is on `PATH` and restart your term
 npm run desktop:build
 ```
 
-Output is under `src-tauri/target/release/bundle/`. Build on the target operating system: Windows installers on Windows, macOS bundles/DMGs on macOS, and Linux packages on Linux. The GitHub Actions workflow builds all three and uploads artifacts; it does not publish releases. Builds are unsigned unless signing is configured separately. The macOS CI job builds the runner's architecture, not a universal Intel/Apple Silicon binary.
+Output is under `src-tauri/target/release/bundle/`. Build on the target operating system: Windows installers on Windows, macOS bundles/DMGs on macOS, and Linux packages on Linux. The GitHub Actions workflow checks and builds all three platforms. Pushing a `v2.*` tag also publishes the installers and SHA-256 checksums to GitHub Releases; tags containing a hyphen are marked as prereleases. Builds are unsigned unless signing is configured separately. The macOS CI job builds the runner's architecture, not a universal Intel/Apple Silicon binary.
 
 ## Insert menu
 
