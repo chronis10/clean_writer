@@ -53,6 +53,9 @@
         "depends": ["xdg-desktop-portal"],
         "desktopTemplate": "desktop.template"
       }
+    },
+    "resources": {
+      "dictionaries/licenses/": "licenses/spelling/"
     }
   }
 }

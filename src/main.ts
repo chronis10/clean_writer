@@ -13,6 +13,7 @@ import {
   drawSelection,
   panels,
   Decoration,
+  closeHoverTooltips,
   type DecorationSet,
 } from "@codemirror/view";
 import {
@@ -49,6 +50,7 @@ import { paginate, stylePaper, fonts, type Page } from "./pages";
 import { resolveImages, type LoadedImage } from "./images";
 import { icon } from "./icons";
 import { findPanel } from "./find-panel";
+import { spellingHover } from "./spelling";
 import { insertCommands, markdownInsertion } from "./insertions";
 import {
   sourcePagination,
@@ -56,7 +58,7 @@ import {
   PAGE_GAP,
   type SourcePage,
 } from "./source-pages";
-import { PAGE_HEIGHT } from "./pages";
+import { PAGE_HEIGHT, PAGE_WIDTH } from "./pages";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -66,8 +68,8 @@ app.innerHTML = `
 <div id="find-host"></div>
 <div id="file-menu" class="popover" hidden><button id="new">New</button><button id="open">Open</button><div id="recent"></div><button id="save">Save</button><button id="save-as">Save As…</button><button id="export">Export PDF…</button><button id="insert-image">Insert image…</button></div>
 <div id="bookmark-menu" class="popover" hidden></div>
-<div id="settings-panel" class="popover settings-panel" hidden><h2>Settings</h2><h3>Typography</h3><label>Font<select id="font"><option value="Serif">Serif</option><option value="Sans">Sans Serif</option><option value="Mono">Monospaced</option></select></label><label>Size<input id="size" type="range" min="11" max="22" step="1"><output id="size-value"></output></label><h3>Page margins</h3><label>Margin<select id="margin"><option value="45">Narrow — 45 pt</option><option value="64">Normal — 64 pt</option><option value="85">Wide — 85 pt</option></select><output id="margin-value" hidden></output></label><hr><p>Named files save automatically after a typing pause. Untitled drafts are recovered automatically; use File → Save to choose a location.</p></div>
-<div id="notice" role="status" hidden></div><main id="canvas" aria-label="Writing canvas"><div id="source-host"><article id="source-paper" class="source-paper"><div id="source-background" aria-hidden="true"></div><div id="editor" aria-label="Markdown editor"></div></article></div><div id="preview-host" hidden></div></main>
+<div id="settings-panel" class="popover settings-panel" hidden><h2>Settings</h2><h3>Typography</h3><label>Font<select id="font"><option value="Serif">Serif</option><option value="Sans">Sans Serif</option><option value="Mono">Monospaced</option></select></label><label>Size<input id="size" type="range" min="11" max="22" step="1"><output id="size-value"></output></label><h3>Page margins</h3><label>Margin<select id="margin"><option value="45">Narrow — 45 pt</option><option value="64">Normal — 64 pt</option><option value="85">Wide — 85 pt</option></select><output id="margin-value" hidden></output></label><hr><p>Draft recovery is automatic. Use File → Save to write your changes to a file.</p></div>
+<div id="notice" role="status" hidden></div><main id="canvas" aria-label="Writing canvas"><div id="document-frame"><div id="source-host"><article id="source-paper" class="source-paper"><div id="source-background" aria-hidden="true"></div><div id="editor" aria-label="Markdown editor"></div></article></div><div id="preview-host" hidden></div></div></main>
 <footer class="statusbar"><div><span id="word-count">0 words</span><span class="status-separator">·</span><span id="page-count">1 page</span><span id="search-count" class="search-count sr-only" hidden></span></div><div class="zoom-controls"><button id="zoom-out" aria-label="Zoom out">${icon("minusZoom")}</button><input id="zoom" type="range" min="50" max="200" step="10" aria-label="Page zoom"><button id="zoom-in" aria-label="Zoom in">${icon("plusZoom")}</button><button id="zoom-value" title="Reset zoom to 100%">100%</button></div></footer></div>
 <dialog id="confirm-dialog"><form method="dialog"><h2>Keep your changes?</h2><p id="confirm-message">Save this document before continuing, or discard its unsaved changes.</p><div class="dialog-actions"><button value="cancel">Cancel</button><button value="discard">Discard</button><button value="save" class="primary">Save</button></div></form></dialog>
 <dialog id="error-dialog"><form method="dialog"><h2>File operation failed</h2><p id="error-message"></p><div class="dialog-actions"><button class="primary">OK</button></div></form></dialog>`;
@@ -80,16 +82,15 @@ let prefs: Preferences = { ...defaults },
 let busy = false,
   ready = false,
   exporting = false,
-  autosaveTimer: ReturnType<typeof setTimeout> | undefined,
   recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let renderTimer: ReturnType<typeof setTimeout> | undefined,
   renderGeneration = 0,
   pages: Page[] = [],
-  currentSection = 0,
+  currentPreviewPage = 0,
   requestedOpen = false;
 let sourcePages: SourcePage[] = [{ from: 0, to: 0, section: 0 }];
 let recoveryFailed = false,
-  autosaveBlocked = false;
+  saveFailed = false;
 let tail: Promise<unknown> = Promise.resolve();
 const serial = <T>(job: () => Promise<T>): Promise<T> => {
   const next = tail.then(job, job);
@@ -163,12 +164,18 @@ function editorState() {
       history(),
       drawSelection(),
       markdown(),
+      spellingHover(
+        (word) => api<string[]>("spelling_suggestions", { word }),
+        (words) => api<string[]>("spelling_misspellings", { words }),
+        () => desktop && !prefs.preview,
+      ),
       search({ top: true, createPanel: findPanel }),
       panels({ topContainer: $("find-host") }),
       breaks,
       EditorView.lineWrapping,
       EditorView.contentAttributes.of({
-        spellcheck: "true",
+        spellcheck: "false",
+        autocorrect: "off",
         "aria-label": "Markdown source",
       }),
       keymap.of([
@@ -189,9 +196,9 @@ function editorState() {
           const text = update.state.doc.toString();
           doc.bookmarks = moveAnchors(doc.text, text, doc.bookmarks);
           doc.text = text;
-          autosaveBlocked = false;
+          saveFailed = false;
           scheduleRender();
-          scheduleSave();
+          scheduleRecovery();
           updateBookmarks();
           updateStatus();
         }
@@ -297,14 +304,6 @@ function scheduleRecovery() {
     200,
   );
 }
-function scheduleSave() {
-  scheduleRecovery();
-  clearTimeout(autosaveTimer);
-  autosaveTimer = setTimeout(() => {
-    if (doc.path && dirty() && !busy && !autosaveBlocked)
-      void run(() => save(false, true));
-  }, 1000);
-}
 function updateStatus() {
   if (editor.state.facet(EditorState.readOnly) !== (busy || !ready))
     editor.dispatch({
@@ -318,7 +317,7 @@ function updateStatus() {
     ? "Working…"
     : recoveryFailed
       ? "Recovery unavailable"
-      : autosaveBlocked
+      : saveFailed
         ? "Save failed"
         : dirty()
           ? doc.path
@@ -367,14 +366,29 @@ function updateSettings() {
   stylePaper($("thumbnails"), prefs);
   for (const host of [$("source-host"), $("preview-host")]) {
     stylePaper(host, prefs);
-    host.style.zoom = String(prefs.zoom);
+    host.style.transform = `scale(${prefs.zoom})`;
   }
+  updateDocumentFrame();
   editor.dispatch({ effects: theme.reconfigure(editorTheme()) });
+  if (prefs.preview) editor.dispatch({ effects: closeHoverTooltips });
+  editor.requestMeasure();
 }
+// Transforms keep browser text hit-testing and CodeMirror in the same coordinate
+// system. Reserve the scaled bounds separately, since transforms do not affect flow.
+function updateDocumentFrame() {
+  const host = $(prefs.preview ? "preview-host" : "source-host");
+  $("document-frame").style.width = `${PAGE_WIDTH * prefs.zoom}px`;
+  $("document-frame").style.height = `${host.offsetHeight * prefs.zoom}px`;
+}
+const documentSizeObserver = new ResizeObserver(updateDocumentFrame);
+documentSizeObserver.observe($("source-host"));
+documentSizeObserver.observe($("preview-host"));
+
 function changeSettings(change: Partial<Preferences>, render = true) {
   if (change.preview === true) imageCache.clear();
   prefs = preferences({ ...prefs, ...change });
   updateSettings();
+  if (change.preview !== undefined) updateThumbnails();
   scheduleRecovery();
   if (render) scheduleRender();
 }
@@ -396,7 +410,7 @@ function applySnapshot(snapshot: Snapshot, replaceText = true) {
   savedText = snapshot.savedText;
   recent = snapshot.session.recent;
   prefs = preferences(snapshot.session.preferences);
-  autosaveBlocked = false;
+  saveFailed = false;
   notice("");
   updateSettings();
   updateRecent();
@@ -408,8 +422,7 @@ function resetEditor() {
   editor.setState(editorState());
 }
 
-async function save(saveAs = false, automatic = false): Promise<boolean> {
-  clearTimeout(autosaveTimer);
+async function save(saveAs = false): Promise<boolean> {
   clearTimeout(recoveryTimer);
   try {
     await checkpoint();
@@ -417,28 +430,32 @@ async function save(saveAs = false, automatic = false): Promise<boolean> {
     if (!snapshot) return false;
     // Keep editor history when a save changes the destination.
     applySnapshot(snapshot, false);
-    if (dirty()) scheduleSave();
+    if (dirty()) scheduleRecovery();
     return true;
   } catch (e) {
-    autosaveBlocked = true;
+    saveFailed = true;
     notice(
       `Save failed. ${recoveryFailed ? "Keep this window open until recovery or saving succeeds." : "Your recovery copy is retained."} ${e}`,
       true,
     );
-    if (!automatic) throw e;
-    return false;
+    throw e;
   }
 }
-async function confirmReplacement(): Promise<boolean> {
-  await checkpoint();
-  if (!dirty()) return true;
+async function unsavedChoice(): Promise<string> {
   const dialog = $<HTMLDialogElement>("confirm-dialog");
+  // Escape must always cancel, even if an earlier confirmation chose Save.
+  dialog.returnValue = "cancel";
   dialog.showModal();
-  const choice = await new Promise<string>((resolve) =>
+  return new Promise<string>((resolve) =>
     dialog.addEventListener("close", () => resolve(dialog.returnValue), {
       once: true,
     }),
   );
+}
+async function confirmReplacement(): Promise<boolean> {
+  await checkpoint();
+  if (!dirty()) return true;
+  const choice = await unsavedChoice();
   return choice === "discard" || (choice === "save" && (await save(false)));
 }
 async function replaceDocument(
@@ -446,7 +463,6 @@ async function replaceDocument(
   args: Record<string, unknown> = {},
 ) {
   if (!(await confirmReplacement())) return;
-  clearTimeout(autosaveTimer);
   clearTimeout(recoveryTimer);
   const snapshot = await api<Snapshot | null>(command, args);
   if (snapshot) {
@@ -480,6 +496,16 @@ function updateRecent() {
     $("recent").append(button);
   }
 }
+function thumbnailBookmarkPage(offset: number) {
+  const sourceIndex = sourcePageAt(sourcePages, offset);
+  // Preview pagination differs from source pagination. Keep source bookmarks
+  // available on their section's first preview page; the marker opens the source.
+  return prefs.preview
+    ? pages.findIndex(
+        (page) => page.section === sourcePages[sourceIndex].section,
+      )
+    : sourceIndex;
+}
 function updateBookmarks() {
   const index = sourcePageAt(sourcePages, doc.cursor);
   const marked = doc.bookmarks.some(
@@ -492,27 +518,42 @@ function updateBookmarks() {
   $("thumbnails")
     .querySelectorAll<HTMLElement>(".thumbnail")
     .forEach((button, pageIndex) => {
-      button.classList.toggle("active", pageIndex === index);
+      button.classList.toggle(
+        "active",
+        pageIndex === (prefs.preview ? currentPreviewPage : index),
+      );
       button.querySelector(".thumbnail-bookmark")?.remove();
       if (
         doc.bookmarks.some(
-          (mark) => sourcePageAt(sourcePages, mark.offset) === pageIndex,
+          (mark) => thumbnailBookmarkPage(mark.offset) === pageIndex,
         )
       ) {
         const marker = document.createElement("span");
         marker.className = "thumbnail-bookmark";
         marker.innerHTML = icon("bookmark");
-        marker.title = "Bookmarked page";
+        marker.title = prefs.preview
+          ? "Open source bookmark in this section"
+          : "Bookmarked page";
+        marker.onclick = (event) => {
+          event.stopPropagation();
+          const mark = doc.bookmarks.find(
+            (mark) => thumbnailBookmarkPage(mark.offset) === pageIndex,
+          );
+          if (mark) jump(mark.offset);
+        };
         marker.setAttribute("aria-label", "Bookmarked page");
         button.querySelector(".mini-paper")?.append(marker);
       }
     });
 }
-function jump(offset: number) {
+function jump(offset: number, pageStart = false) {
   if (prefs.preview) changeSettings({ preview: false }, false);
   editor.dispatch({
     selection: { anchor: Math.min(doc.text.length, offset) },
-    scrollIntoView: true,
+    effects: EditorView.scrollIntoView(Math.min(doc.text.length, offset), {
+      y: pageStart ? "start" : "nearest",
+      yMargin: pageStart ? prefs.margin * prefs.zoom + 24 : 5,
+    }),
   });
   editor.focus();
 }
@@ -647,10 +688,19 @@ async function render(generation: number) {
   updateThumbnails();
 }
 function updateThumbnails() {
+  const visiblePages = prefs.preview ? pages : sourcePages;
+  currentPreviewPage = Math.min(
+    currentPreviewPage,
+    Math.max(0, pages.length - 1),
+  );
   $("page-count").textContent =
-    `${sourcePages.length} ${sourcePages.length === 1 ? "page" : "pages"}`;
+    `${visiblePages.length} ${visiblePages.length === 1 ? "page" : "pages"}`;
   $("thumbnails").replaceChildren();
-  sourcePages.forEach((page, index) => {
+  visiblePages.forEach((page, index) => {
+    const pageText =
+      "from" in page
+        ? doc.text.slice(page.from, page.to)
+        : page.element.querySelector(".page-body")?.textContent || "";
     const button = document.createElement("button");
     button.className = "thumbnail";
     button.setAttribute("aria-label", `Go to page ${index + 1}`);
@@ -658,11 +708,10 @@ function updateThumbnails() {
     mini.className = "mini-paper";
     const excerpt = document.createElement("div");
     excerpt.className = "mini-text";
-    excerpt.textContent = doc.text.slice(page.from, page.to) || " ";
+    excerpt.textContent = pageText || " ";
     mini.append(excerpt);
     const badges = document.createElement("span");
     badges.className = "thumbnail-badges";
-    const pageText = doc.text.slice(page.from, page.to);
     for (const kind of ["note", "todo"])
       if (new RegExp(`\\[!${kind.toUpperCase()}\\]`).test(pageText)) {
         const badge = document.createElement("span");
@@ -676,19 +725,20 @@ function updateThumbnails() {
     label.textContent = String(index + 1);
     button.append(mini, label);
     button.onclick = () => {
-      currentSection = page.section;
-      const mark = doc.bookmarks.find(
-        (b) => sourcePageAt(sourcePages, b.offset) === index,
-      );
-      if (mark || !prefs.preview) jump(mark?.offset ?? page.from);
-      else
-        (
-          pages.find((p) => p.section === page.section) || pages[index]
-        )?.element.scrollIntoView({ block: "start" });
+      if ("element" in page) {
+        currentPreviewPage = index;
+        page.element.scrollIntoView({ block: "start" });
+        updateBookmarks();
+      } else {
+        const mark = doc.bookmarks.find(
+          (b) => thumbnailBookmarkPage(b.offset) === index,
+        );
+        jump(mark?.offset ?? page.from, !mark);
+      }
     };
     button.oncontextmenu = (event) => {
       const marks = doc.bookmarks.filter(
-        (b) => sourcePageAt(sourcePages, b.offset) === index,
+        (b) => thumbnailBookmarkPage(b.offset) === index,
       );
       if (!marks.length) return;
       event.preventDefault();
@@ -772,11 +822,32 @@ function hidePopovers() {
   $("settings-panel").hidden = true;
 }
 async function closeApp() {
-  await checkpoint();
-  if (doc.path && dirty() && !autosaveBlocked && !(await save(false, true)))
-    return;
-  if (autosaveBlocked && !(await confirmReplacement())) return;
-  await getCurrentWindow().destroy();
+  clearTimeout(recoveryTimer);
+  let closed = false;
+  try {
+    if (dirty()) {
+      const pendingChoice = unsavedChoice();
+      // Keep recovery current while the modal is open, but do not let a
+      // recovery failure bypass the user's Save / Discard / Cancel choice.
+      try {
+        await checkpoint();
+      } catch (e) {
+        notice(`Recovery could not be stored: ${e}`, true);
+      }
+      const choice = await pendingChoice;
+      if (choice === "cancel") return;
+      if (choice === "save") {
+        if (!(await save(false))) return;
+      } else if (choice === "discard") {
+        applySnapshot(await api<Snapshot>("discard_changes"));
+      } else return;
+    } else await checkpoint();
+    await getCurrentWindow().destroy();
+    closed = true;
+  } finally {
+    // Resume draft recovery if closing was canceled or saving failed.
+    if (!closed && dirty()) scheduleRecovery();
+  }
 }
 const actions: Record<string, () => Promise<unknown>> = {
   new: () => replaceDocument("new_document"),
@@ -913,6 +984,24 @@ $("canvas").addEventListener(
     if (e.ctrlKey) {
       e.preventDefault();
       changeSettings({ zoom: prefs.zoom - e.deltaY * 0.002 }, false);
+    } else if (
+      !e.shiftKey &&
+      e.deltaX === 0 &&
+      (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+        (Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 40))
+    ) {
+      // Mouse notches use lines or large pixel deltas. Leave small, precise
+      // trackpad movements native, and keep wheel speed independent of zoom.
+      e.preventDefault();
+      if (!e.defaultPrevented) return;
+      const canvas = $("canvas");
+      const unit =
+        e.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? prefs.size * 1.2
+          : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? canvas.clientHeight
+            : 1;
+      canvas.scrollBy({ top: e.deltaY * unit * 2, behavior: "instant" });
     }
   },
   { passive: false },
@@ -921,7 +1010,6 @@ window.addEventListener("blur", () => {
   if (ready && !busy)
     void serial(async () => {
       await checkpoint();
-      if (doc.path && dirty() && !autosaveBlocked) await save(false, true);
     }).catch((e) => notice(String(e), true));
 });
 async function start() {
@@ -945,10 +1033,8 @@ async function start() {
           else void action().catch(error);
         }
       });
-      await getCurrentWindow().onCloseRequested(async (e) => {
-        e.preventDefault();
-        if (busy) return;
-        await run(closeApp);
+      await listen("close-requested", () => {
+        if (!busy) void run(closeApp);
       });
       snapshot = await api<Snapshot>("initial_state");
     } else {

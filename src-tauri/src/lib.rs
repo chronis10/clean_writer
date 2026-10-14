@@ -1,5 +1,6 @@
 mod document;
 mod images;
+mod spelling;
 use document::{atomic_write, read_document, Bookmark, Document, Rendered, Session};
 use serde::Serialize;
 use std::{
@@ -192,6 +193,23 @@ impl Runtime {
         }
         Ok(self.snapshot())
     }
+    fn discard_changes(&mut self) -> Result<Snapshot, String> {
+        self.transition(|writer| {
+            if writer.session.document.path.is_some() {
+                let doc = &mut writer.session.document;
+                doc.text = writer.saved_text.clone().unwrap_or_default();
+                let length = doc.text.encode_utf16().count();
+                doc.cursor = doc.cursor.min(length);
+                for bookmark in &mut doc.bookmarks {
+                    bookmark.offset = bookmark.offset.min(length);
+                }
+                writer.keep_navigation();
+            } else {
+                writer.session.document = Document::default();
+                writer.saved_text = None;
+            }
+        })
+    }
     fn open(&mut self, path: PathBuf) -> Result<Snapshot, String> {
         let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
         let text = read_document(&path)?;
@@ -286,6 +304,10 @@ fn new_document(state: State<Writer>) -> Result<Snapshot, String> {
         writer.session.document = Document::default();
         writer.saved_text = None;
     })
+}
+#[tauri::command]
+fn discard_changes(state: State<Writer>) -> Result<Snapshot, String> {
+    lock(&state)?.discard_changes()
 }
 #[tauri::command]
 async fn open_document(
@@ -416,6 +438,7 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            spelling::warm_up();
             let dir = app.path().app_data_dir()?;
             fs::create_dir_all(&dir)?;
             let store = dir.join("session-v2.json");
@@ -573,17 +596,29 @@ pub fn run() {
             app.set_menu(menu)?;
             Ok(())
         })
+        // Block the native close synchronously, before an asynchronous webview
+        // event can race window destruction. Only the approved frontend flow
+        // calls destroy(), which deliberately bypasses CloseRequested.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.emit("close-requested", ());
+            }
+        })
         .on_menu_event(|app, event| {
             let _ = app.emit("file-action", event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
             initial_state,
             update_recent_menu,
+            spelling::spelling_suggestions,
+            spelling::spelling_misspellings,
             render_markdown,
             load_image,
             pick_image,
             checkpoint,
             new_document,
+            discard_changes,
             open_document,
             open_requested,
             open_recent,
@@ -617,6 +652,53 @@ mod tests {
             store: dir.join("session.json"),
             pending_open: None,
         }
+    }
+    #[test]
+    fn discard_restores_saved_recovery_without_overwriting_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("saved.md");
+        fs::write(&path, "Saved κείμενο").unwrap();
+        let mut state = writer(dir.path());
+        state.open(path.clone()).unwrap();
+        state.session.document.text = "Saved κείμενο with unsaved edits".into();
+        state.session.document.cursor = 999;
+        state.persist().unwrap();
+        // Discard must never overwrite changes made by another application.
+        fs::write(&path, "External changes").unwrap();
+        state.discard_changes().unwrap();
+        assert_eq!(state.session.document.text, "Saved κείμενο");
+        assert_eq!(
+            state.session.document.cursor,
+            "Saved κείμενο".encode_utf16().count()
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "External changes");
+        let recovered: serde_json::Value =
+            serde_json::from_slice(&fs::read(&state.store).unwrap()).unwrap();
+        assert_eq!(recovered["session"]["document"]["text"], "Saved κείμενο");
+    }
+
+    #[test]
+    fn discarding_a_draft_clears_its_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = writer(dir.path());
+        state.session.document.text = "Unsaved draft".into();
+        state.persist().unwrap();
+        state.discard_changes().unwrap();
+        let recovered: serde_json::Value =
+            serde_json::from_slice(&fs::read(&state.store).unwrap()).unwrap();
+        assert_eq!(recovered["session"]["document"]["text"], "");
+        assert!(state.session.document.path.is_none());
+        assert!(state.saved_text.is_none());
+    }
+
+    #[test]
+    fn failed_discard_preserves_unsaved_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = writer(dir.path());
+        state.session.document.text = "Keep this draft".into();
+        state.store = dir.path().to_path_buf();
+        assert!(state.discard_changes().is_err());
+        assert_eq!(state.session.document.text, "Keep this draft");
     }
     #[test]
     fn picked_images_use_portable_relative_paths() {

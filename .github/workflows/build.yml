@@ -32,7 +32,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb xdotool webkit2gtk-driver
       - run: npm ci
       - run: npm run format:check
       - run: npm test
@@ -48,6 +48,9 @@ jobs:
           npm run test:ui
       - name: Build installers
         run: npm run desktop:build
+      - name: Native close confirmation
+        if: runner.os == 'Linux'
+        run: dbus-run-session -- python3 tests/native_close.py --package "src-tauri/target/release/bundle/deb/Clean Writer_2.0.0_amd64.deb"
       - uses: actions/upload-artifact@v4
         with:
           name: clean-writer-${{ runner.os }}

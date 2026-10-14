@@ -16,9 +16,10 @@ This branch is the cross-platform 2.0 development version. The existing 1.x GitH
 - Headings, emphasis, strikethrough, code, links, tables, nested lists, quotes, and task lists.
 - Blue `[!NOTE]` and amber `[!TODO]` callouts. Quoted and bare markers are supported; markers inside code stay literal.
 - New, Open, Open Recent, Save, Save As, and Export PDF through native File menus.
-- One-second autosave, draft recovery, per-file cursor positions, and bookmarks that follow edits. A small bookmark symbol appears at the top-left of page thumbnails; note/todo symbols stay bottom-right. Toggle a bookmark from any row on its page.
-- Safe file replacement and external-change detection. A failed save retains your recovery copy; use Save As if another editor changed the file.
+- Automatic draft recovery, explicit Save, per-file cursor positions, and bookmarks that follow edits. A small bookmark symbol appears at the top-left of page thumbnails; note/todo symbols stay bottom-right. Toggle a bookmark from any row on its page.
+- Safe file replacement and external-change detection. Edits stay unsaved until you choose Save. Closing with unsaved edits offers Save / Discard / Cancel; canceled or failed saves keep the window open. Discarded edits are removed from recovery. A failed save retains your recovery copy; use Save As if another editor changed the file.
 - Light/dark appearance, serif/sans/monospaced fonts, font size, margins, sidebar visibility, and 50–200% zoom.
+- Offline English and Greek spell-check with bundled dictionaries, misspelling underlines, and click-to-apply hover/right-click suggestions. Works on first launch, including Windows and Linux installers.
 - Markdown file associations in installers, command-line file opening, and a single desktop instance.
 - Local-only storage: no account, analytics, cloud backend, or automatic updater.
 
@@ -113,7 +114,7 @@ Use the zoom slider, Ctrl+wheel/trackpad pinch, or click the zoom percentage to 
 
 Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and create a new A4 source page. Automatic A4 page spaces in source, preview, and PDF do not change the saved Markdown.
 
-Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Close/quit flushes recovery; named documents also save when possible. Abrupt process termination can lose edits made since the last completed checkpoint.
+Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Close/quit asks before closing unsaved edits; Save is required to update the Markdown file. Recovery checkpoints do not clear the unsaved state. Abrupt process termination can lose edits made since the last completed checkpoint.
 
 The Swift application's macOS preferences are not imported. Your existing Markdown documents can be opened directly; previously stored settings, recent files, bookmarks, and unsaved Swift drafts remain in the old application's preferences.
 
@@ -135,13 +136,20 @@ Web image URLs are downloaded when rendering preview or generating page thumbnai
 
 Images are limited to 16 MB per file/download and 8192 pixels per dimension; large images are resized to at most 2400 pixels per dimension for display/export. Preview caches up to 16 images for 30 seconds; reopening preview refreshes them.
 
+## Spell-check
+
+English and Greek spelling data and the checker are embedded in the application executable on every supported platform. The `.exe`, `.msi`, `.deb`, and other bundles need no dictionary downloads, language-pack setup, administrator commands, or network connection for spelling.
+
+In edit mode, hover over an underlined word or right-click it to open suggestions. Click a suggestion to replace only that word; Undo restores it. Correct words keep the standard context menu. Accented Greek text, including decomposed Unicode input, is supported. Text is never automatically corrected or sent to a service.
+
+The checker runs in the background and checks visible source text as you type or scroll. Dictionary redistribution notices are included in the installer resources under `licenses/spelling`; the corresponding source files are in `src-tauri/dictionaries`.
+
 ## Current differences and limits
 
-- Source pagination measures Markdown source rows; formatted preview/PDF can have a different page count. Page thumbnails represent source pages and jump to their source position or bookmark.
+- Source pagination measures Markdown source rows; formatted preview/PDF can have a different page count. The sidebar follows the active mode’s page count and page positions.
 - PDF pages are high-resolution images of the formatted layout, including Unicode and page numbers. Exported text is **not selectable/searchable**, and long PDFs can be large. This differs from the previous native text PDF exporter.
 - Fonts and webview text metrics can differ between operating systems. Long blocks flow across pages; unusual oversized non-text content may require smaller fonts or margins.
 - HTML is displayed as literal text. No mathematical formulas, syntax colouring, or footnotes are provided.
-- Webview spelling assistance depends on the operating system; native macOS automatic correction parity is not guaranteed.
 - Files must be UTF-8 and at most 20 MB when opened. Very long documents may take time to paginate or export.
 - Installers require their respective build/test environments. UI and backend checks on one platform do not prove installer behavior on other operating systems.
 
@@ -159,7 +167,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-Rust tests cover Markdown rendering, image decoding and path resolution, JPEG orientation, Unicode saves, recovery, navigation, external-change protection, and failed-open rollback. TypeScript tests cover document anchors and preferences. UI tests exercise editing, save failures, document replacement, search, pagination, appearance, and PDF generation using a mocked desktop bridge; they do not replace native OS testing.
+Rust tests cover Markdown rendering, image decoding and path resolution, JPEG orientation, Unicode saves, recovery, navigation, external-change protection, and failed-open rollback. TypeScript tests cover document anchors and preferences. UI tests exercise editing, save failures, document replacement, search, pagination, appearance, and PDF generation using a mocked desktop bridge; they do not replace native OS testing. Linux CI additionally runs `tests/native_close.py` against the packaged `.deb` in an isolated X11/D-Bus session, sends a real native close event after a typing pause, and verifies Cancel and Save.
 
 ## Project structure
 

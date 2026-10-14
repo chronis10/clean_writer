@@ -26,3 +26,6 @@ open = "5"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+spellbook = "=0.4.2"
+unicode-normalization = "0.1"

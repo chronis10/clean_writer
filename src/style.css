@@ -267,8 +267,16 @@ button svg {
   scrollbar-width: none;
   background: var(--canvas);
 }
+#document-frame {
+  position: relative;
+  margin-inline: auto;
+}
 #source-host,
 #preview-host {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
   width: 595.28px;
   margin-inline: auto;
   display: flex;
@@ -753,4 +761,34 @@ dialog p {
 .markdown li > ul,
 .markdown li > ol {
   margin-bottom: 0;
+}
+
+/* Only the requested hover popup; existing editor chrome remains unchanged. */
+.cm-tooltip:has(.spelling-suggestions) {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  box-shadow: 0 3px 12px #00000020;
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+}
+.spelling-suggestions {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  min-width: 100px;
+  max-width: 240px;
+}
+.spelling-suggestions button {
+  padding: 5px 9px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.spelling-error {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: #d32f2f;
+  text-underline-offset: 2px;
 }
