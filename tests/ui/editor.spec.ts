@@ -24,6 +24,9 @@ async function setup(
         checkpoints: [],
         savedPDF: null,
         failSave: false,
+        pickImageCount: 0,
+        cancelImage: false,
+        cancelSave: false,
       };
       const canvas = document.createElement("canvas");
       canvas.width = 120;
@@ -61,7 +64,12 @@ async function setup(
             if (args.source.includes("missing")) throw "Image not found";
             return w.__TEST__.image;
           }
-          if (command === "pick_image") return "![example](images/example.png)";
+          if (command === "pick_image") {
+            w.__TEST__.pickImageCount++;
+            return w.__TEST__.cancelImage
+              ? null
+              : "![example](images/example.png)";
+          }
           if (command === "update_recent_menu") return null;
           if (command === "initial_state") return structuredClone(snapshot);
           if (command === "checkpoint") {
@@ -97,6 +105,7 @@ async function setup(
             };
           }
           if (command === "save_document") {
+            if (w.__TEST__.cancelSave) return null;
             if (w.__TEST__.failSave) throw "Simulated disk failure";
             snapshot.session.document.path = "/notes/example.md";
             snapshot.savedText = snapshot.session.document.text;
@@ -531,4 +540,46 @@ test("thumbnails refresh font, size, margins and page slices with typography", a
       .first()
       .evaluate((el) => parseFloat(getComputedStyle(el).fontSize)),
   ).toBeCloseTo(typography.size, 2);
+});
+
+test("Insert menu commands insert editable Markdown and preserve undo", async ({
+  page,
+}) => {
+  await setup(page, "", "/notes/example.md");
+  await page.evaluate(() => (window as any).__TEST__.menu("insert-heading-2"));
+  await expect(page.locator(".cm-content")).toContainText("## Heading");
+  await page.keyboard.type("My heading");
+  await expect(page.locator(".cm-content")).toContainText("## My heading");
+  await page.evaluate(() => (window as any).__TEST__.menu("insert-bold"));
+  await expect(page.locator(".cm-content")).toContainText("**bold text**");
+  await page.evaluate(() => (window as any).__TEST__.menu("undo"));
+  await expect(page.locator(".cm-content")).not.toContainText("**bold text**");
+  await page.evaluate(() => (window as any).__TEST__.menu("insert-note"));
+  await expect(page.locator(".cm-content")).toContainText("[!NOTE]");
+  await page.evaluate(() => (window as any).__TEST__.menu("insert-table"));
+  await expect(page.locator(".cm-content")).toContainText(
+    "| :--- | :---: | ---: |",
+  );
+});
+test("Insert Image saves an untitled document before the picker, and cancellation does not insert", async ({
+  page,
+}) => {
+  await setup(page, "A draft");
+  await page.evaluate(() => {
+    (window as any).__TEST__.cancelSave = true;
+    (window as any).__TEST__.menu("insert-image");
+  });
+  await expect(page.locator("#insert-image")).toBeEnabled();
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.pickImageCount),
+  ).toBe(0);
+  await page.evaluate(() => {
+    (window as any).__TEST__.cancelSave = false;
+    (window as any).__TEST__.cancelImage = true;
+    (window as any).__TEST__.menu("insert-image");
+  });
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__TEST__.pickImageCount))
+    .toBe(1);
+  await expect(page.locator(".cm-content")).toHaveText("A draft");
 });

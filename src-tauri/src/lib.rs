@@ -60,6 +60,61 @@ fn update_recent_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), S
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct InsertEntry {
+    label: String,
+    id: Option<String>,
+    #[serde(default)]
+    items: Vec<InsertEntry>,
+}
+fn append_insert_items(
+    app: &tauri::AppHandle,
+    menu: &tauri::menu::Submenu<tauri::Wry>,
+    entries: &[InsertEntry],
+) -> Result<(), tauri::Error> {
+    for entry in entries {
+        if let Some(id) = &entry.id {
+            menu.append(&tauri::menu::MenuItem::with_id(
+                app,
+                format!("insert-{id}"),
+                &entry.label,
+                true,
+                None::<&str>,
+            )?)?;
+        } else {
+            let child = tauri::menu::Submenu::new(app, &entry.label, true)?;
+            append_insert_items(app, &child, &entry.items)?;
+            menu.append(&child)?;
+        }
+    }
+    Ok(())
+}
+
+fn image_markdown(path: &Path, document: &Path) -> Result<String, String> {
+    let url = tauri::Url::from_file_path(path).map_err(|_| "Invalid image path.")?;
+    let parent = document
+        .parent()
+        .ok_or("Save the Markdown file before inserting an image.")?;
+    let base =
+        tauri::Url::from_directory_path(parent).map_err(|_| "Invalid document directory.")?;
+    // Windows drive letters/UNC volumes cannot be represented by a relative file path.
+    let same_root = parent.components().next() == path.components().next();
+    let source = if same_root {
+        base.make_relative(&url)
+    } else {
+        None
+    }
+    .unwrap_or_else(|| url.to_string());
+    let alt = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]");
+    Ok(format!("![{alt}](<{source}>)"))
+}
+
 struct Runtime {
     session: Session,
     saved_text: Option<String>,
@@ -186,32 +241,26 @@ async fn pick_image(
     window: tauri::WebviewWindow,
     state: State<'_, Writer>,
 ) -> Result<Option<String>, String> {
-    let Some(file) = file_dialog(&window)
-        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
-        .pick_file()
-        .await
-    else {
+    let current = lock(&state)?
+        .session
+        .document
+        .path
+        .clone()
+        .ok_or("Save the Markdown file before inserting an image.")?;
+    let document = PathBuf::from(&current);
+    let mut dialog =
+        file_dialog(&window).add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
+    if let Some(parent) = document.parent() {
+        dialog = dialog.set_directory(parent);
+    }
+    let Some(file) = dialog.pick_file().await else {
         return Ok(None);
     };
+    if lock(&state)?.session.document.path.as_deref() != Some(current.as_str()) {
+        return Err("Document changed while choosing an image.".into());
+    }
     let path = fs::canonicalize(file.path()).map_err(|e| e.to_string())?;
-    let url = tauri::Url::from_file_path(&path).map_err(|_| "Invalid image path.")?;
-    let current = lock(&state)?.session.document.path.clone();
-    let base = current
-        .as_deref()
-        .and_then(|p| Path::new(p).parent())
-        .and_then(|p| tauri::Url::from_directory_path(p).ok());
-    let source = base
-        .as_ref()
-        .and_then(|base| url.as_str().strip_prefix(base.as_str()))
-        .unwrap_or(url.as_str());
-    let alt = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('[', "\\[")
-        .replace(']', "\\]");
-    Ok(Some(format!("![{alt}](<{source}>)")))
+    image_markdown(&path, &document).map(Some)
 }
 #[tauri::command]
 fn checkpoint(
@@ -497,6 +546,11 @@ pub fn run() {
                     &tauri::menu::PredefinedMenuItem::select_all(app.handle(), None)?,
                 ],
             )?)?;
+            let insert = tauri::menu::Submenu::new(app.handle(), "Insert", true)?;
+            let entries: Vec<InsertEntry> =
+                serde_json::from_str(include_str!("../../src/insert-menu.json"))?;
+            append_insert_items(app.handle(), &insert, &entries)?;
+            menu.append(&insert)?;
             #[cfg(not(target_os = "macos"))]
             file.append(&tauri::menu::MenuItem::with_id(
                 app.handle(),
@@ -564,6 +618,62 @@ mod tests {
             pending_open: None,
         }
     }
+    #[test]
+    fn picked_images_use_portable_relative_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let document_folder = root.path().join("notes");
+        let assets = root.path().join("assets");
+        fs::create_dir_all(document_folder.join("images")).unwrap();
+        fs::create_dir_all(&assets).unwrap();
+        let document = document_folder.join("report.md");
+        for (folder, name, expected) in [
+            (document_folder.clone(), "photo.png", "photo.png"),
+            (
+                document_folder.join("images"),
+                "photo.png",
+                "images/photo.png",
+            ),
+            (assets, "photo.png", "../assets/photo.png"),
+            (document_folder.clone(), "photo [one].png", ""),
+        ] {
+            let image = folder.join(name);
+            fs::write(&image, []).unwrap();
+            let markdown = image_markdown(&image, &document).unwrap();
+            let source = markdown.split("](<").nth(1).unwrap().trim_end_matches(">)");
+            assert!(!source.starts_with("file:"));
+            if !expected.is_empty() {
+                assert_eq!(source, expected);
+            } else {
+                assert!(source.contains("%20"));
+                assert!(markdown.contains("\\[one\\]"));
+            }
+            assert_eq!(
+                fs::canonicalize(images::local_path(source, Some(&document)).unwrap()).unwrap(),
+                fs::canonicalize(image).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn insert_menu_catalog_has_unique_commands() {
+        fn collect(entries: &[InsertEntry], ids: &mut std::collections::HashSet<String>) {
+            for entry in entries {
+                assert!(!entry.label.is_empty());
+                if let Some(id) = &entry.id {
+                    assert!(ids.insert(id.clone()));
+                } else {
+                    assert!(!entry.items.is_empty());
+                    collect(&entry.items, ids);
+                }
+            }
+        }
+        let entries: Vec<InsertEntry> =
+            serde_json::from_str(include_str!("../../src/insert-menu.json")).unwrap();
+        let mut ids = std::collections::HashSet::new();
+        collect(&entries, &mut ids);
+        assert!(ids.contains("image") && ids.contains("heading-6") && ids.contains("todo"));
+    }
+
     #[test]
     fn external_changes_are_never_silently_overwritten() {
         let dir = tempfile::tempdir().unwrap();

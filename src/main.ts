@@ -17,6 +17,7 @@ import {
 } from "@codemirror/view";
 import {
   history,
+  isolateHistory,
   historyKeymap,
   defaultKeymap,
   indentWithTab,
@@ -48,6 +49,7 @@ import { paginate, stylePaper, fonts, type Page } from "./pages";
 import { resolveImages, type LoadedImage } from "./images";
 import { icon } from "./icons";
 import { findPanel } from "./find-panel";
+import { insertCommands, markdownInsertion } from "./insertions";
 import {
   sourcePagination,
   sourcePageAt,
@@ -572,7 +574,29 @@ function imageLoader(documentPath: string | null, fresh = false) {
     return image;
   };
 }
+function insertMarkdown(command: string) {
+  if (!ready || busy) return;
+  if (prefs.preview) changeSettings({ preview: false }, false);
+  const selected = editor.state.selection.main;
+  const insertion = markdownInsertion(
+    doc.text,
+    selected.from,
+    selected.to,
+    command,
+  );
+  editor.dispatch({
+    changes: { from: insertion.from, to: insertion.to, insert: insertion.text },
+    selection: { anchor: insertion.anchor, head: insertion.head },
+    scrollIntoView: true,
+    annotations: isolateHistory.of("full"),
+  });
+  editor.focus();
+}
 async function insertImage() {
+  if (!doc.path) {
+    notice("Save this Markdown file first so the image path can be relative.");
+    if (!(await save(false))) return;
+  }
   const markdown = await api<string | null>("pick_image");
   if (!markdown) return;
   if (prefs.preview) changeSettings({ preview: false }, false);
@@ -581,6 +605,7 @@ async function insertImage() {
   editor.dispatch({
     changes: { from: selected.from, to: selected.to, insert: insertion },
     selection: { anchor: selected.from + insertion.length },
+    annotations: isolateHistory.of("full"),
   });
   editor.focus();
 }
@@ -763,6 +788,17 @@ const actions: Record<string, () => Promise<unknown>> = {
 };
 const menuActions: Record<string, () => Promise<unknown>> = {
   ...actions,
+  ...Object.fromEntries(
+    insertCommands()
+      .filter((command) => command !== "image" && command !== "page-break")
+      .map((command) => [
+        `insert-${command}`,
+        async () => insertMarkdown(command),
+      ]),
+  ),
+  "insert-page-break": async () => {
+    if (ready && !busy) addPage();
+  },
   quit: closeApp,
   undo: async () => undo(editor),
   redo: async () => redo(editor),

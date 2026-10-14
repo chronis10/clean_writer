@@ -11,7 +11,7 @@ This branch is the cross-platform 2.0 development version. The existing 1.x GitH
 ## Features
 
 - A4 source pages with the Swift app’s 595.28 × 841.89-point canvas, neutral light/dark appearance, 192-point sidebar, icon toolbar, and footer. One CodeMirror document keeps undo/redo, selection across pages, search, and line wrapping.
-- Local and web images in preview, thumbnails, and PDF export, with an Insert image file picker.
+- Local and web images in preview, thumbnails, and PDF export, with an Insert → Image file picker and relative paths.
 - Formatted A4 preview with automatic pagination, page numbers, thumbnails, and manual page breaks.
 - Headings, emphasis, strikethrough, code, links, tables, nested lists, quotes, and task lists.
 - Blue `[!NOTE]` and amber `[!TODO]` callouts. Quoted and bare markers are supported; markers inside code stay literal.
@@ -78,6 +78,16 @@ npm run desktop:build
 ```
 
 Output is under `src-tauri/target/release/bundle/`. Build on the target operating system: Windows installers on Windows, macOS bundles/DMGs on macOS, and Linux packages on Linux. The GitHub Actions workflow builds all three and uploads artifacts; it does not publish releases. Builds are unsigned unless signing is configured separately. The macOS CI job builds the runner's architecture, not a universal Intel/Apple Silicon binary.
+
+## Insert menu
+
+Use **Insert** to add supported Markdown without memorizing its syntax. It offers all six headings and underline-style headings, bold/italic/bold italic/strikethrough, inline and block code, escaped punctuation, bulleted/numbered/nested lists, pending/completed tasks, quotes/nested quotes, links/reference links/automatic URL and email links, images, aligned tables, horizontal rules, notes, todos, line breaks, and page breaks.
+
+Inline formatting wraps selected text. Headings and lists format the current or selected lines. With no content selected, commands insert a template and select its editable placeholder. Each insertion can be undone normally.
+
+**Insert → Image…** opens the native file browser in the Markdown file’s folder. Save an untitled document first; canceling the save or image picker leaves the text unchanged. Images beside the document use a filename such as `photo.png`; images in subfolders use `images/photo.png`; images in sibling folders use `../assets/photo.png`. Spaces and special characters are URL-encoded. The image file stays in its original location. On Windows, an image on another drive falls back to a file URL because a relative path cannot cross drives.
+
+Keep the `.md` file and its image folders together when sharing or moving the document. Renaming or moving an image without updating its Markdown path makes that image unavailable.
 
 ## Keyboard shortcuts
 
