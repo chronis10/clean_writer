@@ -33,6 +33,7 @@ export interface Snapshot {
   pendingOpen?: boolean;
 }
 export interface Rendered {
+  flow?: string;
   sections: string[];
   words: number;
 }

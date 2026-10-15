@@ -1,4 +1,5 @@
-import { markdownBlocks, repairPageStarts } from "./markdown-blocks";
+import { flowingPages, manualPreviewSections } from "./page-flow";
+import { markdownBlocks } from "./markdown-blocks";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -133,7 +134,7 @@ const editorTheme = () =>
         caretColor: "var(--ink)",
       },
       ".cm-scroller": {
-        overflow: "auto",
+        overflow: "clip",
         fontFamily: "inherit",
         lineHeight: "1.2",
       },
@@ -152,11 +153,10 @@ function layoutSource() {
   pageEditor.sync();
   sourcePages = pageEditor.ranges;
   doc.pageStarts = sourcePages.map((page) => page.from);
-  doc.pageLayoutVersion = 1;
+  doc.pageLayoutVersion = 2;
 }
 function pageExtensions() {
   return [
-    markdown(),
     markdownHighlighting,
     spellingHover(
       (word: string) => api<string[]>("spelling_suggestions", { word }),
@@ -183,6 +183,7 @@ function editorState() {
     selection: { anchor: doc.cursor },
     extensions: [
       history(),
+      markdown(),
       rangesField,
       invertedEffects.of((tr) =>
         tr.docChanged
@@ -211,12 +212,18 @@ function editorState() {
           updateBookmarks();
           updateStatus();
         }
-        if (update.selectionSet || update.docChanged) {
+        const reflowed = update.transactions.some((tr) =>
+          tr.effects.some((effect) => effect.is(pageRangesEffect)),
+        );
+        if (update.selectionSet || update.docChanged || reflowed) {
           doc.cursor = update.state.selection.main.head;
-          if (!prefs.preview && update.selectionSet) {
+          if (
+            !prefs.preview &&
+            (update.selectionSet ||
+              (reflowed && pageEditor.views.some((view) => view.hasFocus)))
+          ) {
             readingPageKey =
-              pageEditor.ranges[sourcePageAt(sourcePages, doc.cursor)]?.key ??
-              null;
+              pageEditor.ranges[pageEditor.activeIndex]?.key ?? null;
             followVisiblePage(true);
           }
           updateBookmarks();
@@ -232,6 +239,7 @@ const pageEditor = new PagedEditor(
   editorState(),
   rangesField,
   pageExtensions,
+  () => prefs,
 );
 const editor = pageEditor.master;
 
@@ -558,9 +566,14 @@ function captureReadingPosition(): ReadingPosition | null {
   } else {
     const view = pageEditor.views[index],
       line = view.lineBlockAtHeight((body.scrollTop + clip) * view.scaleY);
-    const block = markdownBlocks(view.state.doc.toString()).find(
-      (b) => line.from >= b.from && line.from < b.to,
+    const text = view.state.doc.toString();
+    const blocks = markdownBlocks(text).filter((block) =>
+      text.slice(block.from, block.to).trim(),
     );
+    const block =
+      blocks.find((b) => line.from >= b.from && line.from < b.to) ??
+      blocks.find((b) => b.from >= line.from) ??
+      blocks.at(-1);
     if (block) {
       const first = view.lineBlockAt(block.from),
         last = view.lineBlockAt(Math.max(block.from, block.to - 1));
@@ -621,10 +634,16 @@ function restoreReadingPosition(position: ReadingPosition, focus = false) {
     } else {
       const view = pageEditor.views[index],
         length = view.state.doc.length;
-      const blocks = markdownBlocks(view.state.doc.toString());
-      const block = blocks.find(
-        (b) => position.sourceFrom! >= b.from && position.sourceFrom! < b.to,
+      const text = view.state.doc.toString();
+      const blocks = markdownBlocks(text).filter((block) =>
+        text.slice(block.from, block.to).trim(),
       );
+      const block =
+        blocks.find(
+          (b) => position.sourceFrom! >= b.from && position.sourceFrom! < b.to,
+        ) ??
+        blocks.find((b) => b.from >= position.sourceFrom!) ??
+        blocks.at(-1);
       if (block) {
         mapped = true;
         const first = view.lineBlockAt(Math.min(length, block.from)),
@@ -731,8 +750,7 @@ function applySnapshot(snapshot: Snapshot, replaceText = true) {
   recent = snapshot.session.recent;
   prefs = preferences(snapshot.session.preferences);
   if (replaceText) {
-    if (doc.pageLayoutVersion !== 1)
-      doc.pageStarts = repairPageStarts(doc.text, doc.pageStarts);
+    doc.pageStarts = undefined;
     resetEditor();
     layoutSource();
   }
@@ -1039,17 +1057,9 @@ async function render(generation: number) {
     return;
   }
   const documentPath = doc.path;
-  const sourceKeys = pageEditor.ranges.map((page) => page.key);
-  const pageText = sourcePages
-    .map((page) => doc.text.slice(page.from, page.to))
-    .join("\f");
-  const result = await api<Rendered>("render_markdown", { text: pageText });
-  if (result.sections.length !== sourceKeys.length)
-    throw new Error(
-      "Preview must contain exactly one section per source page.",
-    );
+  const result = await api<Rendered>("render_markdown", { text: doc.text });
   const sections = await resolveImages(
-    result.sections,
+    result.flow ? [result.flow] : result.sections,
     prefs,
     imageLoader(documentPath),
   );
@@ -1058,8 +1068,13 @@ async function render(generation: number) {
   host.className = "measurement-host";
   document.body.append(host);
   let next: Page[];
+  let sourceKeys: string[];
   try {
-    next = previewContainers(sections, prefs, host);
+    const flow = flowingPages(doc.text, sections, prefs, host, !!result.flow);
+    pageEditor.setFlowRanges(flow.pages);
+    layoutSource();
+    sourceKeys = pageEditor.ranges.map((page) => page.key);
+    next = previewContainers(flow.html, prefs, host);
   } catch (e) {
     host.remove();
     throw e;
@@ -1224,11 +1239,17 @@ async function exportPDF() {
   try {
     const rendered = await api<Rendered>("render_markdown", { text: doc.text });
     const printSections = await resolveImages(
-      rendered.sections,
+      rendered.flow ? [rendered.flow] : rendered.sections,
       prefs,
       imageLoader(doc.path, true),
     );
-    const printPages = paginate(printSections, { ...prefs, dark: false }, host);
+    const printPages = paginate(
+      rendered.flow
+        ? manualPreviewSections(doc.text, printSections[0])
+        : printSections,
+      { ...prefs, dark: false },
+      host,
+    );
     await document.fonts.ready;
     const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
       import("html2canvas"),
@@ -1526,10 +1547,6 @@ $("canvas").addEventListener(
     if (e.ctrlKey) {
       e.preventDefault();
       changeSettings({ zoom: prefs.zoom - e.deltaY * 0.002 }, false);
-    } else if (scrollsWithinPage(e)) {
-      // Let the bounded page consume its own native wheel/trackpad input.
-      // Once it reaches an edge, the canvas can scroll to another page.
-      return;
     } else if (
       !e.shiftKey &&
       e.deltaX === 0 &&
@@ -1552,16 +1569,6 @@ $("canvas").addEventListener(
   },
   { passive: false },
 );
-function scrollsWithinPage(event: WheelEvent) {
-  const scroller = (event.target as Element).closest<HTMLElement>(
-    ".source-page .cm-scroller,.preview-page .page-body",
-  );
-  if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 1)
-    return false;
-  return event.deltaY > 0
-    ? scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 1
-    : event.deltaY < 0 && scroller.scrollTop > 0;
-}
 window.addEventListener("blur", () => {
   if (ready && !busy)
     void serial(async () => {

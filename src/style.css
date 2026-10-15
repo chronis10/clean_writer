@@ -329,12 +329,12 @@ button svg {
 .source-page-body .cm-scroller {
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: clip;
   scrollbar-width: none;
 }
 /* Native WebKit overlay scrollbars can float above menus even after being
-   hidden. Keep them disabled from creation, as on the outer canvas; wheel,
-   touchpad, keyboard and selection scrolling still use the bounded scrollers. */
+   hidden. Keep them disabled from creation. Page bodies clip their measured
+   contents; wheel and touchpad input scroll the outer document canvas. */
 .source-page .cm-scroller::-webkit-scrollbar,
 .preview-page .page-body::-webkit-scrollbar {
   display: none;
@@ -357,7 +357,7 @@ button svg {
 }
 .preview-page .page-body {
   min-height: 0;
-  overflow: auto;
+  overflow: clip;
   scrollbar-width: none;
 }
 .page-body {

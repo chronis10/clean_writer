@@ -24,7 +24,7 @@ export function stylePaper(
   element.style.setProperty("--document-size", `${prefs.size}px`);
   element.style.setProperty("--document-margin", `${prefs.margin}px`);
 }
-function sanitizedContent(html: string) {
+export function sanitizedContent(html: string) {
   // Only resolved PNGs are allowed into either preview or print containers.
   const imageSource = document.createElement("template");
   imageSource.innerHTML = DOMPurify.sanitize(html);
@@ -53,8 +53,8 @@ function sanitizedContent(html: string) {
   return parsed.content;
 }
 
-// One real preview container for each source page. Formatted content stays
-// in its own bounded scroller rather than being redistributed among pages.
+// One real preview container for each measured source range. Pagination is
+// computed before these containers are mounted; page bodies never scroll.
 export function previewContainers(
   sections: string[],
   prefs: Preferences,

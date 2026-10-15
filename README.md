@@ -4,12 +4,12 @@
 
 ## Recent updates
 
-- **Independent A4 pages:** Each page has its own editor and bounded content area. Overflow scrolls inside the page instead of bleeding into neighbouring pages.
+- **Automatic A4 flow:** Wrapped lines are measured against the page width, font, and margins. Content continues onto the next A4 page when the current page fills, with no internal page scrolling or text bleed. Editing, deleting, or changing typography recalculates the page boundaries.
 - **Reliable page insertion:** Add page inserts immediately below the current page indicated in the sidebar, preserving later content.
 - **Page removal:** Right-click a sidebar thumbnail and choose **Remove page**. Undo restores the page and its contents.
 - **Sidebar tracking:** The sidebar follows your position and updates its current-page indicator in both editor and preview.
 - **Editor/preview synchronisation:** Both modes share the same page containers, and switching modes preserves your reading position.
-- **Intact Markdown blocks:** Automatic page boundaries keep code blocks, tables, lists, paragraphs, and other Markdown blocks together.
+- **Preserved Markdown formatting:** Small Markdown blocks stay together where possible. Long code blocks, tables, lists, and paragraphs continue across pages with their formatting intact.
 - **HTML image rendering:** HTML image blocks render as images, respecting alignment, width, and relative file paths.
 - **Autosave settings:** Autosave is enabled by default and can be changed in Settings.
 - **Current-page bookmarks:** The bookmark button and Ctrl/⌘D toggle a bookmark on the current visible page in both editor and preview.
@@ -28,9 +28,9 @@ This branch is the cross-platform 2.0 development version. The existing 1.x GitH
 
 ## Features
 
-- A4 source pages with the Swift app’s 595.28 × 841.89-point canvas, neutral light/dark appearance, 192-point sidebar, icon toolbar, and footer. Each source page has its own CodeMirror editor and bounded scrolling text area. Editing one page leaves neighbouring page contents unchanged; undo/redo and search still cover the whole document.
+- A4 source pages with the Swift app’s 595.28 × 841.89-point canvas, neutral light/dark appearance, 192-point sidebar, icon toolbar, and footer. Each source page has its own CodeMirror editor and measured content area. Content flows across automatic page boundaries; explicit page breaks stay in place. Undo/redo and search still cover the whole document.
 - Local and web images in preview, thumbnails, and PDF export, with an Insert → Image file picker and relative paths.
-- HTML image blocks (including alignment and width attributes) render in preview and PDF with images resolved relative to the Markdown file. Switching editor/preview preserves the visible page and reading position, using source block positions to account for formatting differences. The sidebar scrolls and moves its current-page indicator as you navigate the editor or preview. Right-click a thumbnail and choose Remove page to delete that page and its contents; Undo restores it. Editor and formatted preview share the same independent A4 page containers, page numbers, thumbnails, and manual page boundaries. Add page inserts a blank container immediately below the selected sidebar thumbnail in either mode, preserving later content.
+- HTML image blocks (including alignment and width attributes) render in preview and PDF with images resolved relative to the Markdown file. Switching editor/preview preserves the visible page and reading position, using source block positions to account for formatting differences. The sidebar scrolls and moves its current-page indicator as you navigate the editor or preview. Right-click a thumbnail and choose Remove page to delete that page and its contents; Undo restores it. Editor and formatted preview share measured A4 page boundaries, page numbers, thumbnails, and explicit page breaks. Add page inserts a blank container immediately below the selected sidebar thumbnail in either mode, preserving later content.
 - Headings, emphasis, strikethrough, code, links, tables, nested lists, quotes, and task lists.
 - Blue `[!NOTE]` and amber `[!TODO]` callouts. Quoted and bare markers are supported; markers inside code stay literal.
 - New, Open, Open Recent, Save, Save As, and Export PDF through native File menus.
@@ -130,7 +130,7 @@ Use the zoom slider, Ctrl+wheel/trackpad pinch, or click the zoom percentage to 
 
 ## Documents and recovery
 
-Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and create a new A4 source page. Existing Markdown is split into independent source page containers only between complete Markdown blocks, without changing its text. Fenced code, lists, tables, quotes, HTML, and paragraphs stay intact; oversized blocks scroll within one container. Older saved boundaries inside blocks are repaired once when opened. Their boundaries are retained in recovery and per-file navigation metadata; changing typography does not redistribute their contents. Text that exceeds a source page stays scrollable within its margins. Preview renders each source page into its own fixed A4 container, with local overflow scrolling and stable container identity. PDF export separately paginates the complete formatted content so overflow is included.
+Documents remain UTF-8 `.md` files. Manual page breaks retain the form-feed character (`U+000C`) and always start a new page, including explicit blank pages. Automatic page boundaries are layout metadata and never add or remove source characters. The app measures wrapped source lines and the rendered Markdown against the chosen fonts, page size, and margins, then flows content onto additional A4 pages as needed. Editing, deleting, pasting, and typography changes recalculate those boundaries. Small Markdown blocks stay together where possible; oversized blocks continue with their semantic formatting preserved. Editor and preview use the same page ranges, and only the outer writing canvas scrolls. PDF export separately paginates the complete formatted content.
 
 Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Autosave writes named Markdown files after one second of inactivity by default; toggle it in Settings. Untitled documents retain draft recovery until Save chooses a path. Close/quit asks before closing unsaved edits. Recovery checkpoints do not clear the unsaved state. Abrupt process termination can lose edits made since the last completed checkpoint.
 

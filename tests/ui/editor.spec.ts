@@ -342,9 +342,27 @@ async function expectSourcePageBounds(page: Page) {
               rect.bottom > box.bottom - (margin + 42) * scale + 1;
             return bad ||
               getComputedStyle(paper).overflow !== "hidden" ||
-              getComputedStyle(scroller).overflowY !== "auto" ||
+              getComputedStyle(scroller).overflowY !== "clip" ||
+              (!scroller.querySelector(".cm-gap") &&
+                scroller.scrollHeight > scroller.clientHeight + 1) ||
               body.querySelectorAll(".cm-editor").length !== 1
-              ? [paper.dataset.pageIndex]
+              ? [
+                  JSON.stringify({
+                    index: paper.dataset.pageIndex,
+                    scroll: scroller.scrollHeight,
+                    client: scroller.clientHeight,
+                    content: body
+                      .querySelector(".cm-content")
+                      ?.getBoundingClientRect().height,
+                    lines: (body.querySelector(".cm-content") as any)?.cmTile
+                      .root.view.state.doc.lines,
+                    text: (
+                      body.querySelector(".cm-content") as any
+                    )?.cmTile.root.view.state.doc
+                      .toString()
+                      .slice(-50),
+                  }),
+                ]
               : [];
           },
         );
@@ -369,7 +387,8 @@ async function expectPreviewPageBounds(page: Page) {
             rect.right > box.right - margin * scale + 1 ||
             Math.abs(box.height / scale - 841.89) > 1 ||
             getComputedStyle(paper).overflow !== "hidden" ||
-            getComputedStyle(body).overflowY !== "auto"
+            getComputedStyle(body).overflowY !== "clip" ||
+            body.scrollHeight > body.clientHeight + 1
             ? [papers.indexOf(paper)]
             : [];
         }),
@@ -1065,7 +1084,9 @@ test("independent pages keep long paragraphs and manual blank pages editable", a
 }) => {
   const text = "Long paragraph words. ".repeat(500) + "\f\fFinal section";
   await setup(page, text);
-  await expect.poll(() => page.locator(".source-page").count()).toBe(3);
+  await expect
+    .poll(() => page.locator(".source-page").count())
+    .toBeGreaterThan(3);
   const source = await page.locator("#source-host").textContent();
   expect(source).toContain("Final section");
   await page.locator("#source-host .cm-content").first().click();
@@ -1085,7 +1106,7 @@ test("independent pages keep long paragraphs and manual blank pages editable", a
     .toBe(text + " added");
 });
 
-test("thumbnails refresh typography while independent page contents stay unchanged", async ({
+test("thumbnails refresh typography and page flow without changing source", async ({
   page,
 }) => {
   await setup(
@@ -1100,7 +1121,9 @@ test("thumbnails refresh typography while independent page contents stay unchang
   await page.locator("#font").selectOption("Mono");
   await page.locator("#size").fill("22");
   await page.locator("#margin").selectOption("85");
-  await expect(page.locator(".thumbnail")).toHaveCount(3);
+  await expect
+    .poll(() => page.locator(".thumbnail").count())
+    .toBeGreaterThan(3);
   const typography = await page
     .locator(".mini-text")
     .first()
@@ -1116,7 +1139,8 @@ test("thumbnails refresh typography while independent page contents stay unchang
   expect(typography.size).toBeCloseTo((22 * 108) / 595.28, 2);
   expect(typography.font).toContain("Menlo");
   expect(typography.margin).toBeCloseTo((85 * 108) / 595.28, 2);
-  expect(typography.text).toBe(previousText);
+  expect(typography.text).toContain("Line 1:");
+  expect(previousText).toContain("Line 1:");
   await expectSourcePageBounds(page);
   await page.locator("#zoom-in").click();
   expect(
@@ -1251,7 +1275,9 @@ for (const preview of [false, true]) {
     );
     if (preview) {
       await page.locator("#preview").click();
-      await expect(page.locator(".preview-page")).toHaveCount(12);
+      await expect
+        .poll(() => page.locator(".preview-page").count())
+        .toBeGreaterThan(12);
     }
     const paper = page.locator(preview ? ".preview-page" : ".source-page");
     await paper.nth(9).evaluate((el) => el.scrollIntoView({ block: "start" }));
@@ -1286,11 +1312,8 @@ for (const preview of [false, true]) {
       await page.locator("#thumbnails").evaluate((el) => el.scrollTop),
     ).toBe(sidebarScroll);
     await page.locator("#settings").click();
-    // Scrolling inside the current independent page brings its thumbnail back.
-    await paper
-      .first()
-      .locator(preview ? ".page-body" : ".cm-scroller")
-      .evaluate((el) => (el.scrollTop = 100));
+    // Clicking the document follows its visible page without internal scrolling.
+    await paper.first().click({ position: { x: 80, y: 100 } });
     await expect(page.locator(".thumbnail").first()).toBeInViewport();
     await expect
       .poll(() => page.locator("#thumbnails").evaluate((el) => el.scrollTop))
@@ -1305,7 +1328,9 @@ test("sidebar page navigation reveals the selected page", async ({ page }) => {
       Array.from({ length: 150 }, (_, i) => `Line ${i + 1}: source content.`),
     ),
   );
-  await expect(page.locator(".thumbnail")).toHaveCount(5);
+  await expect
+    .poll(() => page.locator(".thumbnail").count())
+    .toBeGreaterThanOrEqual(5);
   await page.getByRole("button", { name: "Go to page 4", exact: true }).click();
   await expect(page.locator(".source-page").nth(3)).toBeInViewport();
   const top = await page
@@ -1316,14 +1341,29 @@ test("sidebar page navigation reveals the selected page", async ({ page }) => {
   expect(top).toBeLessThan(150);
 });
 
-test("scrolling within an intact long paragraph keeps its text position", async ({
+test("clicking a long paragraph across flowing pages keeps its text position", async ({
   page,
 }) => {
   const text = Array.from({ length: 1500 }, (_, i) => `word${i}`).join(" ");
   await setup(page, text);
-  await expect(page.locator(".thumbnail")).toHaveCount(1);
+  await expect
+    .poll(() => page.locator(".thumbnail").count())
+    .toBeGreaterThan(1);
   await page.getByRole("button", { name: "Go to page 1", exact: true }).click();
   for (const word of ["word400", "word500", "word600"]) {
+    const index = await page
+      .locator(".source-page .cm-content")
+      .evaluateAll(
+        (elements, word) =>
+          elements.findIndex((el) =>
+            (el as any).cmTile.root.view.state.doc
+              .toString()
+              .includes(word + " "),
+          ),
+        word,
+      );
+    await page.locator(".thumbnail").nth(index).click();
+    await page.waitForTimeout(100);
     const point = await page.locator("#source-host").evaluate((el, word) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -1333,7 +1373,7 @@ test("scrolling within an intact long paragraph keeps its text position", async 
         range.setStart(node, index + 2);
         range.setEnd(node, index + 3);
         let rect = range.getBoundingClientRect();
-        const canvas = document.querySelector(".source-page .cm-scroller")!;
+        const canvas = document.querySelector("#canvas")!;
         canvas.scrollTop += rect.top - 300;
         rect = range.getBoundingClientRect();
         return { x: rect.left + 0.5, y: (rect.top + rect.bottom) / 2 };
@@ -1426,49 +1466,39 @@ test("wheel scrolling reaches distant pages and Ctrl-wheel still zooms", async (
     .toBeGreaterThan(2000);
 });
 
-test("preview shares the source containers and keeps each section in its own scroller", async ({
+test("preview and source share flowing A4 containers with no hidden overflow", async ({
   page,
 }) => {
-  await setup(page, "First source section\fSecond source section");
-  await expect(page.locator(".thumbnail")).toHaveCount(2);
-  await page.evaluate(() => {
-    (window as any).__TEST__.renderedHTML = [80, 70].map((count, section) =>
-      Array.from(
-        { length: count },
-        (_, index) =>
-          `<p>Section ${section + 1}, preview paragraph ${index + 1}.</p>`,
-      ).join(""),
-    );
-  });
+  const sections = [80, 70].map((count, section) =>
+    Array.from(
+      { length: count },
+      (_, i) => `Section ${section + 1}, preview paragraph ${i + 1}.`,
+    ).join("\n\n"),
+  );
+  await setup(page, sections.join("\f"));
   await page.locator("#preview").click();
-  const papers = page.locator("#preview-host .preview-paper");
-  await expect(papers).toHaveCount(2);
-  await expect(papers.nth(0).locator("p")).toHaveCount(80);
-  await expect(papers.nth(1).locator("p")).toHaveCount(70);
+  const papers = page.locator(".preview-page");
+  await expect.poll(() => papers.count()).toBeGreaterThan(2);
+  await expect
+    .poll(async () => [
+      await papers.count(),
+      await page.locator(".source-page").count(),
+    ])
+    .toEqual([await papers.count(), await papers.count()]);
+  await expectPreviewPageBounds(page);
   const count = await papers.count();
   await expect(page.locator(".thumbnail")).toHaveCount(count);
-  await expect(page.locator("#page-count")).toHaveText(`${count} pages`);
-  for (const index of [1, 0]) {
-    await page
-      .getByRole("button", { name: `Go to page ${index + 1}`, exact: true })
-      .click();
-    await expect(page.locator("#preview")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await expect
-      .poll(() =>
-        papers.nth(index).evaluate((el) => el.getBoundingClientRect().top),
-      )
-      .toBeLessThan(100);
-    await expect(page.locator(".thumbnail").nth(index)).toHaveClass(/active/);
-    await expect(page.locator(".mini-text").nth(index)).toContainText(
-      "preview paragraph",
+  for (const index of [count - 1, 0]) {
+    await page.locator(".thumbnail").nth(index).click();
+    await expect(papers.nth(index)).toBeInViewport();
+    await expect(page.locator(".thumbnail").nth(index)).toHaveAttribute(
+      "aria-current",
+      "page",
     );
   }
   await page.locator("#preview").click();
-  await expect(page.locator(".thumbnail")).toHaveCount(2);
-  await expect(page.locator("#page-count")).toHaveText("2 pages");
+  await expect(page.locator(".source-page")).toHaveCount(count);
+  await expectSourcePageBounds(page);
 });
 
 for (const preview of [false, true]) {
@@ -1946,6 +1976,23 @@ for (const [name, text] of [
       .poll(() => page.locator(".source-page").count())
       .toBeGreaterThanOrEqual(1);
     await expectSourcePageBounds(page);
+    if (
+      ["trailing spaces", "leading spaces", "spaces and tabs"].includes(name)
+    ) {
+      const count = await page.locator(".source-page").count();
+      for (let index = 0; index < count; index++) {
+        await page.locator(".thumbnail").nth(index).click();
+        await page.waitForTimeout(50);
+        await expect
+          .poll(() =>
+            page
+              .locator(".source-page .cm-scroller")
+              .nth(index)
+              .evaluate((el) => el.scrollHeight <= el.clientHeight + 1),
+          )
+          .toBe(true);
+      }
+    }
   });
 }
 
@@ -1971,9 +2018,13 @@ for (const [name, block] of [
         elements.map((el) => (el as any).cmTile.root.view.state.doc.toString()),
       );
     expect(contents.join("")).toBe(text);
-    expect(contents.filter((content) => content.includes(block))).toHaveLength(
-      1,
-    );
+    if (name === "oversized fence") {
+      expect(contents.join("")).toContain(block);
+      expect(contents.length).toBeGreaterThan(3);
+    } else
+      expect(
+        contents.filter((content) => content.includes(block)),
+      ).toHaveLength(1);
     expect(contents[0]).not.toContain(block);
     await expectSourcePageBounds(page);
     await page
@@ -1985,9 +2036,11 @@ for (const [name, block] of [
       .evaluateAll((elements) =>
         elements.map((el) => (el as any).cmTile.root.view.state.doc.toString()),
       );
-    expect(inserted.filter((content) => content.includes(block))).toHaveLength(
-      1,
-    );
+    if (name === "oversized fence") expect(inserted.join("")).toContain(block);
+    else
+      expect(
+        inserted.filter((content) => content.includes(block)),
+      ).toHaveLength(1);
     await expectSourcePageBounds(page);
   });
 }
@@ -2181,7 +2234,7 @@ test("Add page uses the end of an automatically paginated block instead of repla
     .toContain("\fBlank inserted page\f");
 });
 
-test("each source page owns an independent editor and expanding one leaves its neighbour unchanged", async ({
+test("each source page owns an independent editor and overflow flows ahead of the next explicit page", async ({
   page,
 }) => {
   await setup(page, "First page\fSecond page");
@@ -2201,8 +2254,12 @@ test("each source page owns an independent editor and expanding one leaves its n
       ),
     )
     .toBe("Independent content.\n".repeat(100) + "\fSecond page");
-  await expect(page.locator(".source-page")).toHaveCount(2);
-  await expect(second.locator(".cm-content")).toHaveText("Second page");
+  await expect
+    .poll(() => page.locator(".source-page").count())
+    .toBeGreaterThan(2);
+  await expect(page.locator(".source-page .cm-content").last()).toHaveText(
+    "Second page",
+  );
   const geometry = await page.locator("#source-host").evaluate((host) => {
     const papers = [...host.querySelectorAll(".source-page")];
     return {
@@ -2218,7 +2275,7 @@ test("each source page owns an independent editor and expanding one leaves its n
   expect(geometry.heights.every((h) => Math.abs(h - 841.89) < 0.1)).toBe(true);
   expect(geometry.gap).toBeCloseTo(24, 1);
   expect(geometry.overflow).toBe("hidden");
-  expect(geometry.scroll).toBe("auto");
+  expect(geometry.scroll).toBe("clip");
   await page.keyboard.press("Control+z");
   await expect(first.locator(".cm-content")).toHaveText("First page");
   await page.locator(".thumbnail").nth(0).click();
@@ -2236,102 +2293,69 @@ test("each source page owns an independent editor and expanding one leaves its n
   ).toHaveText("Second page");
 });
 
-test("preview tracks the source code block even when earlier rendered content is much taller", async ({
+test("preview tracks a code block after headings reflow onto more pages", async ({
   page,
 }) => {
-  const prefix = "Intro line.\n".repeat(20) + "\n";
+  const headings = Array.from(
+    { length: 20 },
+    (_, i) => `# Intro heading ${i}\n\n`,
+  );
+  const prefix = headings.join("");
   const code =
-    "```bash\npython main.py fit\n--trainer.strategy auto\n--trainer.devices 1\n--trainer.accelerator gpu\n```\n";
-  const text = prefix + code + "\nAfter.";
-  await setup(page, text + "\fLater page");
+    "```bash\npython main.py fit\n--trainer.strategy auto\n--trainer.accelerator gpu\n```";
+  const text = prefix + code + "\n\nAfter.\fLater page";
+  await setup(page, text);
   await page.evaluate(
-    ({ prefix, code, text }) => {
+    ({ headings, prefix, code }) => {
+      let offset = 0;
+      const html = headings
+        .map((heading, i) => {
+          const from = offset;
+          offset += heading.length;
+          return `<div class="source-block" data-source-from="${from}" data-source-to="${offset}"><h1>Intro heading ${i}</h1></div>`;
+        })
+        .join("");
       (window as any).__TEST__.renderedHTML = [
-        `<div class="source-block" data-source-from="0" data-source-to="${prefix.length}"><p>${"Tall formatted content.<br>".repeat(120)}</p></div><div class="source-block" data-source-from="${prefix.length}" data-source-to="${prefix.length + code.length}"><pre><code>python main.py fit\n--trainer.strategy auto\n--trainer.devices 1\n--trainer.accelerator gpu\n</code></pre></div><div class="source-block" data-source-from="${text.indexOf("After.")}" data-source-to="${text.length}"><p>After.</p></div>`,
+        html +
+          `<div class="source-block" data-source-from="${prefix.length}" data-source-to="${prefix.length + code.length}"><pre><code>python main.py fit\n--trainer.strategy auto\n--trainer.accelerator gpu\n</code></pre></div><p>After.</p>`,
         "<p>Later page</p>",
       ];
     },
-    { prefix, code, text },
+    { headings, prefix, code },
   );
-  await page.locator(".source-page").first().locator(".cm-content").click();
-  const position = await page
+  await page.locator("#preview").click();
+  await expect(page.locator(".preview-page pre")).toHaveCount(1);
+  await page.locator("#preview").click();
+  const source = page
     .locator(".source-page")
-    .first()
-    .evaluate((paper) => {
-      const line = [...paper.querySelectorAll(".cm-line")].find(
-        (el) => el.textContent === "--trainer.strategy auto",
-      )!;
-      const canvas = document.querySelector("#canvas")!;
-      canvas.scrollTop +=
-        line.getBoundingClientRect().top -
-        canvas.getBoundingClientRect().top -
-        8;
-      return canvas.scrollTop;
-    });
+    .filter({ hasText: "python main.py fit" });
+  await source.click({ position: { x: 80, y: 80 } });
+  await source.evaluate((el) => el.scrollIntoView({ block: "start" }));
   await page.locator("#preview").click();
-  await expect(page.locator(".preview-page")).toHaveCount(2);
-  await expect
-    .poll(() =>
-      page
-        .locator(".preview-page")
-        .first()
-        .locator(".page-body")
-        .evaluate((el) => el.scrollTop),
-    )
-    .toBeGreaterThan(1500);
-  await expect
-    .poll(() =>
-      page
-        .locator(".preview-page")
-        .first()
-        .evaluate((paper) => {
-          const top =
-            document.querySelector("#canvas")!.getBoundingClientRect().top + 8;
-          return [...paper.querySelectorAll<HTMLElement>(".source-block")].find(
-            (el) => el.getBoundingClientRect().bottom > top + 1,
-          )?.dataset.sourceFrom;
-        }),
-    )
-    .toBe(String(prefix.length));
+  await expect(page.locator(".preview-page pre")).toBeInViewport();
+  await expectPreviewPageBounds(page);
   await page.locator("#preview").click();
-  await expect
-    .poll(() =>
-      page
-        .locator("#canvas")
-        .evaluate(
-          (el, position) => Math.abs(el.scrollTop - position),
-          position,
-        ),
-    )
-    .toBeLessThan(2);
+  await expect(source).toBeInViewport();
 });
 
 for (const zoom of [50, 100, 170]) {
-  test(`mode switching preserves the visible page and local position at ${zoom}%`, async ({
+  test(`mode switching preserves the current flowing page at ${zoom}%`, async ({
     page,
   }) => {
     const content = "Reading content with several words.\n".repeat(100);
-    await setup(page, content + "\f" + content + "\f" + content);
+    await setup(page, [content, content, content].join("\f"));
+    await page.locator("#preview").click();
+    await expect
+      .poll(() => page.locator(".preview-page").count())
+      .toBeGreaterThan(3);
+    const count = await page.locator(".preview-page").count();
+    await page.locator("#preview").click();
     await page.locator("#zoom").fill(String(zoom));
-    await page
-      .getByRole("button", { name: "Go to page 1", exact: true })
-      .click();
     await page
       .locator(".source-page")
       .nth(2)
       .locator(".cm-content")
       .click({ position: { x: 30, y: 20 } });
-    await page
-      .locator(".source-page")
-      .nth(2)
-      .evaluate(
-        () =>
-          new Promise((resolve) =>
-            requestAnimationFrame(() =>
-              requestAnimationFrame(() => resolve(null)),
-            ),
-          ),
-      );
     const position = await page
       .locator(".source-page")
       .nth(2)
@@ -2339,44 +2363,26 @@ for (const zoom of [50, 100, 170]) {
         paper.scrollIntoView({ block: "start" });
         const canvas = document.querySelector("#canvas")!;
         canvas.scrollTop += 60;
-        const body = paper.querySelector(".cm-scroller")!;
-        body.scrollTop = (body.scrollHeight - body.clientHeight) * 0.6;
-        return new Promise<{ canvas: number; fraction: number }>((resolve) =>
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() =>
-              resolve({
-                canvas: canvas.scrollTop,
-                fraction:
-                  body.scrollTop / (body.scrollHeight - body.clientHeight),
-              }),
-            ),
-          ),
-        );
+        return canvas.scrollTop;
       });
     await page.locator("#preview").click();
-    await expect(page.locator(".preview-page")).toHaveCount(3);
-    await expect
-      .poll(() =>
-        page.locator("#canvas").evaluate((el) => Math.round(el.scrollTop)),
-      )
-      .toBe(Math.round(position.canvas));
-    await expect
-      .poll(() =>
-        page
-          .locator(".preview-page")
-          .nth(2)
-          .locator(".page-body")
-          .evaluate((el) =>
-            Math.round(
-              (100 * el.scrollTop) / (el.scrollHeight - el.clientHeight),
-            ),
-          ),
-      )
-      .toBe(Math.round(position.fraction * 100));
+    await expect(page.locator(".preview-page")).toHaveCount(count);
     await expect(page.locator(".thumbnail").nth(2)).toHaveAttribute(
       "aria-current",
       "page",
     );
+    await expect
+      .poll(() =>
+        page
+          .locator("#canvas")
+          .evaluate((el, p) => Math.abs(el.scrollTop - p), position),
+      )
+      .toBeLessThan(40);
+    await page
+      .locator(".preview-page")
+      .nth(1)
+      .locator(".page-body")
+      .click({ position: { x: 30, y: 20 } });
     const reverse = await page
       .locator(".preview-page")
       .nth(1)
@@ -2384,130 +2390,274 @@ for (const zoom of [50, 100, 170]) {
         paper.scrollIntoView({ block: "start" });
         const canvas = document.querySelector("#canvas")!;
         canvas.scrollTop += 40;
-        const body = paper.querySelector(".page-body")!;
-        body.scrollTop = (body.scrollHeight - body.clientHeight) * 0.35;
-        return {
-          canvas: canvas.scrollTop,
-          fraction: body.scrollTop / (body.scrollHeight - body.clientHeight),
-        };
+        return canvas.scrollTop;
       });
     await page.locator("#preview").click();
-    await expect
-      .poll(() =>
-        page.locator("#canvas").evaluate((el) => Math.round(el.scrollTop)),
-      )
-      .toBe(Math.round(reverse.canvas));
+    await expect(page.locator(".thumbnail").nth(1)).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
     await expect
       .poll(() =>
         page
-          .locator(".source-page")
-          .nth(1)
-          .locator(".cm-scroller")
-          .evaluate((el) =>
-            Math.round(
-              (100 * el.scrollTop) / (el.scrollHeight - el.clientHeight),
-            ),
-          ),
+          .locator("#canvas")
+          .evaluate((el, p) => Math.abs(el.scrollTop - p), reverse),
       )
-      .toBe(Math.round(reverse.fraction * 100));
+      .toBeLessThan(40);
+    await expectSourcePageBounds(page);
   });
 }
 
-test("editor and preview share independent containers including overflow and insertion from preview", async ({
+test("flowing preview scrolls the document and still inserts a blank page after the current page", async ({
   page,
 }) => {
-  await setup(page, "First page\fSecond page");
-  await expect(page.locator(".source-page")).toHaveCount(2);
-  await page.locator(".source-page").first().locator(".cm-content").click();
-  await page.keyboard.press("Control+a");
   const content = "Independent content.\n".repeat(100);
-  await page.keyboard.insertText(content);
+  await setup(page, content + "\fSecond page");
+  await page.locator("#preview").click();
+  await expect
+    .poll(() => page.locator(".preview-page").count())
+    .toBeGreaterThan(2);
+  const count = await page.locator(".preview-page").count();
+  await expect(page.locator(".preview-page .page-body").last()).toHaveText(
+    "Second page",
+  );
+  await expectPreviewPageBounds(page);
+  const first = page.locator(".preview-page .page-body").first();
+  await page.locator(".thumbnail").first().click();
+  const box = (await first.boundingBox())!;
+  await page.mouse.move(box.x + 50, box.y + 50);
+  await page.mouse.wheel(0, 120);
+  await expect
+    .poll(() => page.locator("#canvas").evaluate((el) => el.scrollTop))
+    .toBeGreaterThan(0);
+  expect(await first.evaluate((el) => el.scrollTop)).toBe(0);
+  await page.locator(".thumbnail").first().click();
+  await first.click({ position: { x: 30, y: 30 } });
+  await page.locator("#add-page").click();
+  await expect
+    .poll(() => page.locator(".preview-page").count())
+    .toBeGreaterThan(count);
+  await expect(page.locator(".preview-page .page-body").nth(1)).toHaveText("");
+  await expect(page.locator(".preview-page .page-body").last()).toHaveText(
+    "Second page",
+  );
+  await page.locator("#preview").click();
+  await expect(page.locator(".source-page .cm-content").nth(1)).toBeFocused();
+  await page.keyboard.type("Inserted page");
+  await page.locator("#preview").click();
+  await expect(page.locator(".preview-page .page-body").nth(1)).toHaveText(
+    "Inserted page",
+  );
+  await page.locator("#settings").click();
+  await page.locator("#size").fill("22");
+  await page.locator("#margin").selectOption("85");
+  await expect
+    .poll(() => page.locator(".preview-page").count())
+    .toBeGreaterThan(count + 1);
+  await expect(page.locator(".preview-page .page-body").last()).toHaveText(
+    "Second page",
+  );
+  await expectPreviewPageBounds(page);
+});
+
+for (const kind of ["paragraph", "fence", "list", "manual pages"]) {
+  test(`flowing A4 pages fit source and preview without internal scrolling: ${kind}`, async ({
+    page,
+  }) => {
+    const text =
+      kind === "fence"
+        ? "```bash\n" +
+          Array.from({ length: 120 }, (_, i) => `command --line ${i}`).join(
+            "\n",
+          ) +
+          "\n```"
+        : kind === "list"
+          ? Array.from(
+              { length: 120 },
+              (_, i) => `${i + 1}. List entry ${i}`,
+            ).join("\n")
+          : kind === "manual pages"
+            ? "First explicit page\f" +
+              "Wrapped words keep flowing onto another page. ".repeat(350) +
+              "\fLast explicit page"
+            : "Wrapped words keep flowing onto another page. ".repeat(500);
+    await setup(page, text);
+    await expect
+      .poll(() => page.locator(".source-page").count())
+      .toBeGreaterThan(2);
+    await expectSourcePageBounds(page);
+    await expect
+      .poll(() =>
+        page
+          .locator(".source-page .cm-content")
+          .evaluateAll((elements) =>
+            elements
+              .map((el) => (el as any).cmTile.root.view.state.doc.toString())
+              .join(""),
+          ),
+      )
+      .toBe(text.replace(/\f/g, ""));
+    const sourceCount = await page.locator(".source-page").count();
+    await page.locator("#preview").click();
+    await expect(page.locator(".preview-page")).toHaveCount(sourceCount);
+    await expectPreviewPageBounds(page);
+    await expect(page.locator("#notice")).not.toContainText("Preview failed");
+  });
+}
+
+test("typing fills the next page and deleting pulls text back without changing manual breaks", async ({
+  page,
+}) => {
+  await setup(page, "Line of content.\n".repeat(30));
+  const content = page.locator(".source-page .cm-content").first();
+  await content.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.insertText("Additional flowing content.\n".repeat(70));
+  await expect
+    .poll(() => page.locator(".source-page").count())
+    .toBeGreaterThan(2);
+  await expectSourcePageBounds(page);
+  const full =
+    "Line of content.\n".repeat(30) +
+    "Additional flowing content.\n".repeat(70);
   await expect
     .poll(() =>
       page.evaluate(
         () => (window as any).__TEST__.snapshot.session.document.text,
       ),
     )
-    .toBe(content + "\fSecond page");
-  await page.locator("#preview").click();
-  await expect(page.locator(".preview-page")).toHaveCount(2);
-  await expect(
-    page.locator(".preview-page").nth(1).locator(".page-body"),
-  ).toHaveText("Second page");
-  await expect(
-    page.locator(".preview-page").first().locator(".page-body"),
-  ).toContainText("Independent content.");
-  await page.locator("#canvas").evaluate((el) => (el.scrollTop = 0));
-  const firstBody = page.locator(".preview-page").first().locator(".page-body");
-  expect(
-    await firstBody.evaluate((el) => el.scrollHeight > el.clientHeight),
-  ).toBe(true);
-  const bounds = await page
-    .locator(".preview-page")
-    .first()
-    .evaluate((paper) => {
-      const p = paper.getBoundingClientRect(),
-        b = paper.querySelector(".page-body")!.getBoundingClientRect();
+    .toBe(full);
+  await expect(page.locator(".source-page .cm-content").last()).toBeFocused();
+  await page.keyboard.press("Control+z");
+  await expect(page.locator(".source-page")).toHaveCount(1);
+  await expectSourcePageBounds(page);
+  await page.keyboard.press("Control+Shift+z");
+  await expect
+    .poll(() => page.locator(".source-page").count())
+    .toBeGreaterThan(2);
+  await expectSourcePageBounds(page);
+});
+
+test("continued preview fragments retain nested code and link formatting", async ({
+  page,
+}) => {
+  await setup(page);
+  const result = await page.evaluate(async () => {
+    const { pageFragment } = await import("/src/page-flow.ts" as string);
+    const root = document.createElement("div");
+    root.innerHTML =
+      '<div class="source-block" data-source-from="0" data-source-to="30"><p><a href="https://example.com"><span class="source-text" data-source-from="0" data-source-to="30"><code>012345678901234567890123456789</code></span></a></p></div>';
+    const fragments = [0, 10, 20].map((from) => {
+      const el = document.createElement("div");
+      el.innerHTML = pageFragment(root, from, from + 10);
       return {
-        height: p.height,
-        top: b.top - p.top,
-        bottom: p.bottom - b.bottom,
-        clip: getComputedStyle(paper).overflow,
-        scroll: getComputedStyle(paper.querySelector(".page-body")!).overflowY,
+        text: el.textContent,
+        code: !!el.querySelector("a code"),
+        href: el.querySelector("a")?.getAttribute("href"),
       };
     });
-  expect(bounds.height).toBeCloseTo(841.89, 1);
-  expect(bounds.top).toBeCloseTo(64, 1);
-  expect(bounds.bottom).toBeCloseTo(106, 1);
-  expect(bounds.clip).toBe("hidden");
-  expect(bounds.scroll).toBe("auto");
-  await expect
-    .poll(() => firstBody.evaluate((body) => body.scrollTop))
-    .toBeGreaterThan(0);
-  await firstBody.evaluate((body) => {
-    body.scrollTop = 0;
+    return fragments;
   });
-  const mouse = (await firstBody.boundingBox())!;
-  const before = await page.locator("#canvas").evaluate((el) => el.scrollTop);
-  await page.mouse.move(mouse.x + 50, mouse.y + 50);
-  await page.mouse.wheel(0, 120);
+  expect(result.map((fragment) => fragment.text).join("")).toBe(
+    "012345678901234567890123456789",
+  );
+  expect(
+    result.every(
+      (fragment) => fragment.code && fragment.href === "https://example.com",
+    ),
+  ).toBe(true);
+});
+
+test("syntax highlighting uses the full Markdown context on continuation pages", async ({
+  page,
+}) => {
+  const lines = Array.from({ length: 100 }, (_, i) =>
+    i === 45 ? "## Still inside the code fence" : `command --line ${i}`,
+  );
+  await setup(page, "```bash\n" + lines.join("\n") + "\n```");
+  const line = page
+    .locator(".source-page .cm-line")
+    .filter({ hasText: "## Still inside the code fence" });
+  for (const dark of [false, true]) {
+    if (dark) await page.locator("#theme").click();
+    const colours = await line.evaluate((el) => {
+      const span = el.querySelector("span")!;
+      const reference = document.createElement("span");
+      reference.style.color = "var(--syntax-code)";
+      el.append(reference);
+      const expected = getComputedStyle(reference).color;
+      reference.remove();
+      return { actual: getComputedStyle(span).color, expected };
+    });
+    expect(colours.actual).toBe(colours.expected);
+  }
+});
+
+test("typing onto a new page at low zoom moves the current indicator with the caret", async ({
+  page,
+}) => {
+  await setup(page, "A short starting line.\n");
+  await page.locator("#zoom").fill("50");
+  await page.locator(".source-page .cm-content").first().click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.insertText(
+    "A correctly spelled line of content.\n".repeat(42),
+  );
+  await expect(page.locator(".source-page .cm-content").last()).toBeFocused();
+  const count = await page.locator(".source-page").count();
+  await expect(page.locator(".thumbnail").nth(count - 1)).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expectSourcePageBounds(page);
+});
+
+test("Markdown list continuation still works through the document coordinator", async ({
+  page,
+}) => {
+  const text = Array.from({ length: 75 }, (_, i) => `- List item ${i}`).join(
+    "\n",
+  );
+  await setup(page, text);
+  await page.locator(".source-page .cm-content").first().click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Continued item");
   await expect
-    .poll(() => firstBody.evaluate((el) => el.scrollTop))
-    .toBeGreaterThan(0);
-  expect(await page.locator("#canvas").evaluate((el) => el.scrollTop)).toBe(
-    before,
-  );
-  await firstBody.click({ position: { x: 30, y: 30 } });
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).__TEST__.snapshot.session.document.text,
+      ),
+    )
+    .toBe(text + "\n- Continued item");
+  await expectSourcePageBounds(page);
+});
+
+test("a blank page inserted inside long code has no empty syntax decorations", async ({
+  page,
+}) => {
+  const text = "```bash\n" + "command --argument value\n".repeat(120) + "```";
+  await setup(page, text);
+  await expect
+    .poll(() => page.locator(".source-page").count())
+    .toBeGreaterThan(2);
+  await page.locator(".thumbnail").first().click();
   await page.locator("#add-page").click();
-  await expect(page.locator("#preview")).toHaveAttribute(
-    "aria-pressed",
-    "true",
+  await expect(page.locator(".source-page .cm-content").nth(1)).toHaveText("");
+  await expect(page.locator(".source-page .cm-content").nth(1)).toBeFocused();
+  await expect(page.locator("#notice")).not.toContainText("Preview failed");
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as any).__TEST__.snapshot.session.document.text.replace(
+          /\f/g,
+          "",
+        ),
+      ),
+    )
+    .toBe(text);
+  await page.keyboard.type("A code comment");
+  await expect(page.locator(".source-page .cm-content").nth(1)).toHaveText(
+    "A code comment",
   );
-  await expect(page.locator(".source-page")).toHaveCount(3);
-  await expect(page.locator(".preview-page")).toHaveCount(3);
-  await expect(
-    page.locator(".preview-page").nth(1).locator(".page-body"),
-  ).toHaveText("");
-  await expect(
-    page.locator(".preview-page").nth(2).locator(".page-body"),
-  ).toHaveText("Second page");
-  await page.locator("#preview").click();
-  await expect(
-    page.locator(".source-page").nth(1).locator(".cm-content"),
-  ).toBeFocused();
-  await page.keyboard.type("Inserted page");
-  await page.locator("#preview").click();
-  await expect(
-    page.locator(".preview-page").nth(1).locator(".page-body"),
-  ).toHaveText("Inserted page");
-  await expect(
-    page.locator(".preview-page").nth(2).locator(".page-body"),
-  ).toHaveText("Second page");
-  await page.locator("#settings").click();
-  await page.locator("#size").fill("22");
-  await page.locator("#margin").selectOption("85");
-  await expect(page.locator(".preview-page")).toHaveCount(3);
-  await expect(
-    page.locator(".preview-page").nth(2).locator(".page-body"),
-  ).toHaveText("Second page");
 });

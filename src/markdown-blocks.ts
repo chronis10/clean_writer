@@ -4,8 +4,8 @@ export interface MarkdownBlock {
   from: number;
   to: number;
 }
-// Top-level syntax nodes include complete lists, tables, paragraphs, HTML and
-// fenced/indented code. Their internal lines are never automatic page breaks.
+// Top-level syntax nodes let pagination keep small Markdown blocks together.
+// Oversized blocks can continue across pages using the full parsed document.
 export function markdownBlocks(text: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let previous = 0;

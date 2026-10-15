@@ -1,6 +1,6 @@
 [package]
 name = "clean-writer"
-version = "2.0.15"
+version = "2.0.16"
 description = "A focused cross-platform Markdown editor"
 authors = ["chronis10"]
 license = "MIT"
