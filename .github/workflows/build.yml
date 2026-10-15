@@ -50,7 +50,9 @@ jobs:
         run: npm run desktop:build
       - name: Native close confirmation
         if: runner.os == 'Linux'
-        run: dbus-run-session -- python3 tests/native_close.py --package "src-tauri/target/release/bundle/deb/Clean Writer_2.0.0_amd64.deb"
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          dbus-run-session -- python3 tests/native_close.py --package "src-tauri/target/release/bundle/deb/Clean Writer_${version}_amd64.deb"
       - uses: actions/upload-artifact@v4
         with:
           name: clean-writer-${{ runner.os }}
