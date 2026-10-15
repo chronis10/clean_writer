@@ -2,6 +2,24 @@
 
 # Clean Writer
 
+## Recent updates
+
+- **Independent A4 pages:** Each page has its own editor and bounded content area. Overflow scrolls inside the page instead of bleeding into neighbouring pages.
+- **Reliable page insertion:** Add page inserts immediately below the current page indicated in the sidebar, preserving later content.
+- **Page removal:** Right-click a sidebar thumbnail and choose **Remove page**. Undo restores the page and its contents.
+- **Sidebar tracking:** The sidebar follows your position and updates its current-page indicator in both editor and preview.
+- **Editor/preview synchronisation:** Both modes share the same page containers, and switching modes preserves your reading position.
+- **Intact Markdown blocks:** Automatic page boundaries keep code blocks, tables, lists, paragraphs, and other Markdown blocks together.
+- **HTML image rendering:** HTML image blocks render as images, respecting alignment, width, and relative file paths.
+- **Autosave settings:** Autosave is enabled by default and can be changed in Settings.
+- **Current-page bookmarks:** The bookmark button and Ctrl/⌘D toggle a bookmark on the current visible page in both editor and preview.
+- **Separate font settings:** Choose editor and preview fonts independently, with Serif, Sans Serif, and Monospaced options.
+- **Markdown syntax colours:** Source Markdown uses readable colours tailored to light and dark mode.
+- **Settings display fix:** Removed the fading grey scrollbar that appeared over Settings while preserving page scrolling.
+- **Dictionary installer:** Settings → Spelling dictionaries offers 12 additional languages using `.aff`/`.dic` pairs. Installed dictionaries activate immediately and work offline. Greek and US English remain bundled.
+
+## About
+
 A focused Markdown editor for **Linux, Windows, and macOS**, rebuilt with **Rust + Tauri 2** on the `rust` branch. The interface uses TypeScript, CSS, and CodeMirror; Rust handles Markdown parsing, native file dialogs, document storage, and recovery. No Swift or Xcode application code is required.
 
 This branch is the cross-platform 2.0 development version. The existing 1.x GitHub releases are the previous macOS application, not builds of this branch.
@@ -10,14 +28,14 @@ This branch is the cross-platform 2.0 development version. The existing 1.x GitH
 
 ## Features
 
-- A4 source pages with the Swift app’s 595.28 × 841.89-point canvas, neutral light/dark appearance, 192-point sidebar, icon toolbar, and footer. One CodeMirror document keeps undo/redo, selection across pages, search, and line wrapping.
+- A4 source pages with the Swift app’s 595.28 × 841.89-point canvas, neutral light/dark appearance, 192-point sidebar, icon toolbar, and footer. Each source page has its own CodeMirror editor and bounded scrolling text area. Editing one page leaves neighbouring page contents unchanged; undo/redo and search still cover the whole document.
 - Local and web images in preview, thumbnails, and PDF export, with an Insert → Image file picker and relative paths.
-- Formatted A4 preview with automatic pagination, page numbers, thumbnails, and manual page breaks.
+- HTML image blocks (including alignment and width attributes) render in preview and PDF with images resolved relative to the Markdown file. Switching editor/preview preserves the visible page and reading position, using source block positions to account for formatting differences. The sidebar scrolls and moves its current-page indicator as you navigate the editor or preview. Right-click a thumbnail and choose Remove page to delete that page and its contents; Undo restores it. Editor and formatted preview share the same independent A4 page containers, page numbers, thumbnails, and manual page boundaries. Add page inserts a blank container immediately below the selected sidebar thumbnail in either mode, preserving later content.
 - Headings, emphasis, strikethrough, code, links, tables, nested lists, quotes, and task lists.
 - Blue `[!NOTE]` and amber `[!TODO]` callouts. Quoted and bare markers are supported; markers inside code stay literal.
 - New, Open, Open Recent, Save, Save As, and Export PDF through native File menus.
-- Automatic draft recovery, explicit Save, per-file cursor positions, and bookmarks that follow edits. A small bookmark symbol appears at the top-left of page thumbnails; note/todo symbols stay bottom-right. Toggle a bookmark from any row on its page.
-- Safe file replacement and external-change detection. Edits stay unsaved until you choose Save. Closing with unsaved edits offers Save / Discard / Cancel; canceled or failed saves keep the window open. Discarded edits are removed from recovery. A failed save retains your recovery copy; use Save As if another editor changed the file.
+- Automatic draft recovery, explicit Save, per-file cursor positions, and bookmarks that follow edits. A small bookmark symbol appears at the top-left of page thumbnails; note/todo symbols stay bottom-right. The bookmark button and Ctrl/⌘D toggle the current visible page in both editor and preview.
+- Safe file replacement and external-change detection. Autosave is enabled by default for named files and can be switched off in Settings. Closing with unsaved edits offers Save / Discard / Cancel; canceled or failed saves keep the window open. Discarded edits are removed from recovery. A failed save retains your recovery copy; use Save As if another editor changed the file.
 - Light/dark appearance, serif/sans/monospaced fonts, font size, margins, sidebar visibility, and 50–200% zoom.
 - Offline English and Greek spell-check with bundled dictionaries, misspelling underlines, and click-to-apply hover/right-click suggestions. Works on first launch, including Windows and Linux installers.
 - Markdown file associations in installers, command-line file opening, and a single desktop instance.
@@ -112,9 +130,9 @@ Use the zoom slider, Ctrl+wheel/trackpad pinch, or click the zoom percentage to 
 
 ## Documents and recovery
 
-Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and create a new A4 source page. Automatic A4 page spaces in source, preview, and PDF do not change the saved Markdown.
+Documents remain UTF-8 `.md` files. Manual page breaks retain the original form-feed character (`U+000C`) and create a new A4 source page. Existing Markdown is split into independent source page containers only between complete Markdown blocks, without changing its text. Fenced code, lists, tables, quotes, HTML, and paragraphs stay intact; oversized blocks scroll within one container. Older saved boundaries inside blocks are repaired once when opened. Their boundaries are retained in recovery and per-file navigation metadata; changing typography does not redistribute their contents. Text that exceeds a source page stays scrollable within its margins. Preview renders each source page into its own fixed A4 container, with local overflow scrolling and stable container identity. PDF export separately paginates the complete formatted content so overflow is included.
 
-Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Close/quit asks before closing unsaved edits; Save is required to update the Markdown file. Recovery checkpoints do not clear the unsaved state. Abrupt process termination can lose edits made since the last completed checkpoint.
+Settings, recent paths, navigation, the active document, and its saved baseline are stored in `session-v2.json` in Tauri's OS-specific application data directory. A recovery checkpoint is scheduled 200 ms after edits or cursor changes. Autosave writes named Markdown files after one second of inactivity by default; toggle it in Settings. Untitled documents retain draft recovery until Save chooses a path. Close/quit asks before closing unsaved edits. Recovery checkpoints do not clear the unsaved state. Abrupt process termination can lose edits made since the last completed checkpoint.
 
 The Swift application's macOS preferences are not imported. Your existing Markdown documents can be opened directly; previously stored settings, recent files, bookmarks, and unsaved Swift drafts remain in the old application's preferences.
 
@@ -146,7 +164,7 @@ The checker runs in the background and checks visible source text as you type or
 
 ## Current differences and limits
 
-- Source pagination measures Markdown source rows; formatted preview/PDF can have a different page count. The sidebar follows the active mode’s page count and page positions.
+- Editor and preview keep the same page count and content boundaries. PDF export may use additional pages to include all formatted content, including content reached by scrolling inside an editor/preview page.
 - PDF pages are high-resolution images of the formatted layout, including Unicode and page numbers. Exported text is **not selectable/searchable**, and long PDFs can be large. This differs from the previous native text PDF exporter.
 - Fonts and webview text metrics can differ between operating systems. Long blocks flow across pages; unusual oversized non-text content may require smaller fonts or margins.
 - HTML is displayed as literal text. No mathematical formulas, syntax colouring, or footnotes are provided.
@@ -167,7 +185,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-Rust tests cover Markdown rendering, image decoding and path resolution, JPEG orientation, Unicode saves, recovery, navigation, external-change protection, and failed-open rollback. TypeScript tests cover document anchors and preferences. UI tests exercise editing, save failures, document replacement, search, pagination, appearance, and PDF generation using a mocked desktop bridge; they do not replace native OS testing. Linux CI additionally runs `tests/native_close.py` against the packaged `.deb` in an isolated X11/D-Bus session, sends a real native close event after a typing pause, and verifies Cancel and Save.
+Rust tests cover Markdown rendering, image decoding and path resolution, JPEG orientation, Unicode saves, recovery, navigation, external-change protection, and failed-open rollback. TypeScript tests cover document anchors and preferences. UI tests exercise editing, save failures, document replacement, search, pagination, appearance, and PDF generation using a mocked desktop bridge; they do not replace native OS testing. Linux CI additionally runs `tests/native_close.py` against the packaged `.deb` in isolated X11/D-Bus sessions at 100% and 200% display scaling. It checks every page boundary in a long Markdown document at 130% zoom, verifies native caret placement and actual typing at 50%, 100%, and 150% page zoom on the first and later pages, then sends a real native close event after a typing pause and verifies Cancel and Save.
 
 ## Project structure
 
@@ -183,3 +201,17 @@ tests/               Unit tests and browser interface tests
 ## License
 
 [MIT](LICENSE). Copyright © 2026 chronis10.
+
+Editor and preview fonts can be selected independently in Settings → Typography (Serif, Sans Serif, or Monospaced). Source Markdown uses a readable syntax palette that follows light and dark appearance.
+
+Settings → Spelling dictionaries lets you install English (UK), French, German,
+Spanish (Spain), Italian, Portuguese (Brazil), Dutch, Russian, Ukrainian, Polish,
+Portuguese (Portugal), and Swedish. Greek and English (US) are included. Additional languages
+are enabled immediately, work offline after installation, and reload on startup.
+The installer downloads pinned Hunspell `.aff`/`.dic` pairs and license notices
+from [LibreOffice dictionaries](https://github.com/LibreOffice/dictionaries),
+converts the declared encoding to UTF-8, and validates the pair before saving it.
+Each language is stored under the app data directory's `dictionaries/<locale>/`
+folder (`~/.local/share/com.chronis10.cleanwriter/dictionaries/` on Linux).
+The installed pair, original license notices, and source revision stay together;
+no administrator access is required. Failed downloads can be retried in Settings.

@@ -60,9 +60,11 @@ jobs:
           archive="src-tauri/target/release/bundle/Clean-Writer-2.0.0-macOS-arm64-app.zip"
           test -d "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
-      - name: Native close confirmation
+      - name: Native A4 bounds, caret placement and close confirmation
         if: runner.os == 'Linux'
-        run: dbus-run-session -- python3 tests/native_close.py --package "src-tauri/target/release/bundle/deb/Clean Writer_2.0.0_amd64.deb"
+        run: |
+          dbus-run-session -- python3 tests/native_close.py --package "src-tauri/target/release/bundle/deb/Clean Writer_2.0.15_amd64.deb"
+          dbus-run-session -- python3 tests/native_close.py --package "src-tauri/target/release/bundle/deb/Clean Writer_2.0.15_amd64.deb" --display-scale 2 --test-dictionary-install
       - uses: actions/upload-artifact@v4
         with:
           name: clean-writer-${{ runner.os }}

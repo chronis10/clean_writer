@@ -33,3 +33,21 @@ it("recognizes filenames on every platform", () => {
   expect(fileName("C:\\Notes\\draft.md")).toBe("draft.md");
   expect(fileName("/notes/δοκιμή.md")).toBe("δοκιμή.md");
 });
+
+it("enables autosave by default and retains an explicit disabled choice", () => {
+  expect(preferences({}).autosave).toBe(true);
+  expect(preferences({ autosave: false }).autosave).toBe(false);
+});
+
+it("migrates the shared font and persists independent preview typography", () => {
+  expect(preferences({ font: "Mono" })).toMatchObject({
+    font: "Mono",
+    previewFont: "Mono",
+  });
+  const independent = preferences({ font: "Sans", previewFont: "Serif" });
+  expect(preferences(JSON.parse(JSON.stringify(independent)))).toMatchObject({
+    font: "Sans",
+    previewFont: "Serif",
+  });
+  expect(preferences({ previewFont: "Missing" }).previewFont).toBe("Serif");
+});

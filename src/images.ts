@@ -45,13 +45,21 @@ export async function resolveImages(
             !(image.width > 0 && image.height > 0)
           )
             throw new Error("Invalid image data.");
-          const scale = Math.min(
-            1,
-            maxWidth / image.width,
-            maxHeight / image.height,
-          );
-          img.width = Math.max(1, Math.floor(image.width * scale));
-          img.height = Math.max(1, Math.floor(image.height * scale));
+          const requestedWidth = Number(img.getAttribute("width"));
+          const requestedHeight = Number(img.getAttribute("height"));
+          const width =
+            requestedWidth > 0 && Number.isFinite(requestedWidth)
+              ? requestedWidth
+              : requestedHeight > 0 && Number.isFinite(requestedHeight)
+                ? (image.width * requestedHeight) / image.height
+                : image.width;
+          const height =
+            requestedHeight > 0 && Number.isFinite(requestedHeight)
+              ? requestedHeight
+              : (image.height * width) / image.width;
+          const scale = Math.min(1, maxWidth / width, maxHeight / height);
+          img.width = Math.max(1, Math.floor(width * scale));
+          img.height = Math.max(1, Math.floor(height * scale));
           img.src = image.dataUrl;
           img.className = "document-image";
           img.removeAttribute("data-image-source");

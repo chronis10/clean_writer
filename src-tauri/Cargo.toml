@@ -1,6 +1,6 @@
 [package]
 name = "clean-writer"
-version = "2.0.0"
+version = "2.0.15"
 description = "A focused cross-platform Markdown editor"
 authors = ["chronis10"]
 license = "MIT"
@@ -29,3 +29,4 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 spellbook = "=0.4.2"
 unicode-normalization = "0.1"
+encoding_rs = "=0.8.35"

@@ -3,8 +3,7 @@ import type { Preferences } from "./model";
 export const PAGE_WIDTH = 595.28,
   PAGE_HEIGHT = 841.89;
 export const fonts: Record<string, string> = {
-  Serif:
-    '"New York", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  Serif: '"New York", Georgia, "Noto Serif", "Liberation Serif", serif',
   Sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   Mono: '"SFMono-Regular", Menlo, Consolas, monospace',
 };
@@ -13,10 +12,79 @@ export interface Page {
   section: number;
   excerpt: string;
 }
-export function stylePaper(element: HTMLElement, prefs: Preferences) {
-  element.style.setProperty("--document-font", fonts[prefs.font]);
+export function stylePaper(
+  element: HTMLElement,
+  prefs: Preferences,
+  preview = true,
+) {
+  element.style.setProperty(
+    "--document-font",
+    fonts[preview ? prefs.previewFont : prefs.font],
+  );
   element.style.setProperty("--document-size", `${prefs.size}px`);
   element.style.setProperty("--document-margin", `${prefs.margin}px`);
+}
+function sanitizedContent(html: string) {
+  // Only resolved PNGs are allowed into either preview or print containers.
+  const imageSource = document.createElement("template");
+  imageSource.innerHTML = DOMPurify.sanitize(html);
+  imageSource.content
+    .querySelectorAll<HTMLImageElement>("img")
+    .forEach((img) => {
+      if (!/^data:image\/png;base64,/.test(img.getAttribute("src") || ""))
+        img.replaceWith(
+          document.createTextNode(img.alt || "[Image unavailable]"),
+        );
+    });
+  imageSource.content
+    .querySelectorAll<HTMLElement>("[align], td[style], th[style]")
+    .forEach((cell) => {
+      const align = (
+        cell.getAttribute("align") || cell.style.textAlign
+      ).toLowerCase();
+      if (["left", "center", "right"].includes(align))
+        cell.dataset.align = align;
+    });
+  const parsed = document.createElement("template");
+  parsed.innerHTML = DOMPurify.sanitize(imageSource.innerHTML, {
+    FORBID_TAGS: ["style", "script", "iframe", "object", "embed"],
+    FORBID_ATTR: ["style", "srcset"],
+  });
+  return parsed.content;
+}
+
+// One real preview container for each source page. Formatted content stays
+// in its own bounded scroller rather than being redistributed among pages.
+export function previewContainers(
+  sections: string[],
+  prefs: Preferences,
+  host: HTMLElement,
+): Page[] {
+  stylePaper(host, prefs);
+  return sections.map((html, index) => {
+    const paper = document.createElement("article");
+    paper.className = "paper preview-paper preview-page";
+    paper.dataset.sourcePageIndex = String(index);
+    paper.setAttribute("aria-label", `Preview page ${index + 1}`);
+    const body = document.createElement("div");
+    body.className = "page-body markdown";
+    body.tabIndex = 0;
+    body.setAttribute("aria-label", `Preview content for page ${index + 1}`);
+    body.append(sanitizedContent(html));
+    const footer = document.createElement("div");
+    footer.className = "page-number";
+    footer.textContent = String(index + 1);
+    paper.append(body, footer);
+    host.append(paper);
+    return {
+      element: paper,
+      section: index,
+      excerpt:
+        body.textContent?.trim().slice(0, 160) ||
+        body.querySelector<HTMLImageElement>("img")?.alt ||
+        "Blank page",
+    };
+  });
 }
 // Clone a formatted block at a text offset, preserving its nested inline structure.
 function fragments(
@@ -80,28 +148,7 @@ export function paginate(
   sections.forEach((html, section) => {
     let body = make(section);
     const parsed = document.createElement("div");
-    // Only resolved PNGs reach this synchronous layout stage.
-    const imageSource = document.createElement("template");
-    imageSource.innerHTML = DOMPurify.sanitize(html);
-    imageSource.content
-      .querySelectorAll<HTMLImageElement>("img")
-      .forEach((img) => {
-        if (!/^data:image\/png;base64,/.test(img.getAttribute("src") || ""))
-          img.replaceWith(
-            document.createTextNode(img.alt || "[Image unavailable]"),
-          );
-      });
-    imageSource.content
-      .querySelectorAll<HTMLTableCellElement>("td[style], th[style]")
-      .forEach((cell) => {
-        const align = cell.style.textAlign;
-        if (["left", "center", "right"].includes(align))
-          cell.dataset.align = align;
-      });
-    parsed.innerHTML = DOMPurify.sanitize(imageSource.innerHTML, {
-      FORBID_TAGS: ["style", "script", "iframe", "object", "embed"],
-      FORBID_ATTR: ["style", "srcset"],
-    });
+    parsed.append(sanitizedContent(html));
     const queue = Array.from(parsed.children) as HTMLElement[];
     for (let block = queue.shift(); block; block = queue.shift()) {
       body.append(block);

@@ -1,5 +1,7 @@
+use crate::dictionary_packs::DictionaryStore;
 use spellbook::Dictionary;
 use std::sync::OnceLock;
+use tauri::State;
 use unicode_normalization::UnicodeNormalization;
 
 // Compile the data into every platform's executable. Installed apps never need
@@ -68,30 +70,78 @@ pub fn warm_up() {
 }
 
 #[tauri::command]
-pub async fn spelling_suggestions(word: String) -> Result<Vec<String>, String> {
+pub async fn spelling_suggestions(
+    word: String,
+    store: State<'_, DictionaryStore>,
+) -> Result<Vec<String>, String> {
     let Some(word) = normalized_word(&word) else {
         return Ok(Vec::new());
     };
-    tauri::async_runtime::spawn_blocking(move || Ok(dictionaries()?.suggest(&word)))
-        .await
-        .map_err(|error| error.to_string())?
+    let installed = store.loaded.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed = installed.read().map_err(|e| e.to_string())?;
+        let bundled = dictionaries()?;
+        if bundled.correct(&word) || installed.values().any(|dictionary| dictionary.check(&word)) {
+            return Ok(Vec::new());
+        }
+        let mut suggestions = bundled.suggest(&word);
+        for dictionary in installed.values() {
+            let mut additional = Vec::new();
+            dictionary.suggest(&word, &mut additional);
+            suggestions.extend(additional);
+        }
+        suggestions.sort_by_key(|suggestion| {
+            edit_distance(&word.to_lowercase(), &suggestion.to_lowercase())
+        });
+        let mut seen = std::collections::HashSet::new();
+        suggestions.retain(|suggestion| seen.insert(suggestion.clone()));
+        suggestions.truncate(5);
+        Ok(suggestions)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub async fn spelling_misspellings(words: Vec<String>) -> Result<Vec<String>, String> {
+pub async fn spelling_misspellings(
+    words: Vec<String>,
+    store: State<'_, DictionaryStore>,
+) -> Result<Vec<String>, String> {
     if words.len() > 512 {
         return Err("Too many words in a spell-check batch".into());
     }
+    let installed = store.loaded.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let installed = installed.read().map_err(|e| e.to_string())?;
         let dictionary = dictionaries()?;
         Ok(words
             .into_iter()
             .filter_map(|word| normalized_word(&word))
-            .filter(|word| !dictionary.correct(word))
+            .filter(|word| {
+                !dictionary.correct(word)
+                    && !installed.values().any(|dictionary| dictionary.check(word))
+            })
             .collect())
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, a) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, b) in b.iter().enumerate() {
+            let previous = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(a != *b))
+                .min(row[j] + 1)
+                .min(previous + 1);
+            diagonal = previous;
+        }
+    }
+    row[b.len()]
 }
 
 #[cfg(test)]

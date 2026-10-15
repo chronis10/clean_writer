@@ -8,6 +8,13 @@
   --line: #dedede;
   --accent: #007aff;
   --selection: #b3d7ff;
+  --syntax-heading: #7041a6;
+  --syntax-mark: #805525;
+  --syntax-link: #075fa8;
+  --syntax-code: #176b50;
+  --syntax-emphasis: #984568;
+  --syntax-quote: #526c85;
+  --syntax-comment: #68736a;
   --document-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --document-size: 15px;
   --document-margin: 64px;
@@ -22,6 +29,13 @@
   --paper: #212121;
   --line: #333;
   --selection: #264f78;
+  --syntax-heading: #c8abf0;
+  --syntax-mark: #dab17a;
+  --syntax-link: #8dc6f5;
+  --syntax-code: #8dd3af;
+  --syntax-emphasis: #eda7c8;
+  --syntax-quote: #a9bed2;
+  --syntax-comment: #a2b3a5;
   color-scheme: dark;
 }
 * {
@@ -260,6 +274,11 @@ button svg {
   stroke-width: 2.5;
 }
 #canvas {
+  /* Keep composited page scrollers and their transient overlay scrollbars
+     inside the document layer, below workspace menus. */
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
   flex: 1;
   overflow: auto;
   min-height: 0;
@@ -298,33 +317,35 @@ button svg {
   box-shadow: 0 4px 20px #00000047;
 }
 .source-paper {
-  position: relative;
-  width: 595.28px;
   padding: var(--document-margin);
   padding-bottom: calc(var(--document-margin) + 42px);
-  color: var(--ink);
+  overflow: hidden;
 }
-#source-background {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
+.source-page-body,
+.source-page-body .cm-editor {
+  height: 100%;
+  min-height: 0;
 }
-.source-page-background {
-  position: absolute;
-  left: 0;
+.source-page-body .cm-scroller {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
 }
-#editor {
-  position: relative;
-}
-.source-page-space {
-  pointer-events: none;
+/* Native WebKit overlay scrollbars can float above menus even after being
+   hidden. Keep them disabled from creation, as on the outer canvas; wheel,
+   touchpad, keyboard and selection scrolling still use the bounded scrollers. */
+.source-page .cm-scroller::-webkit-scrollbar,
+.preview-page .page-body::-webkit-scrollbar {
+  display: none;
 }
 .source-measure {
   position: fixed;
   left: -10000px;
   top: 0;
   font: var(--document-size)/1.2 var(--document-font);
-  white-space: pre-wrap;
+  white-space: break-spaces;
+  word-break: break-word;
   overflow-wrap: anywhere;
   tab-size: 4;
   visibility: hidden;
@@ -332,6 +353,12 @@ button svg {
 .preview-paper {
   padding: var(--document-margin);
   padding-bottom: calc(var(--document-margin) + 42px);
+  overflow: hidden;
+}
+.preview-page .page-body {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
 }
 .page-body {
   height: 100%;
@@ -538,6 +565,21 @@ button svg {
 .settings-panel {
   padding: 20px;
   width: 320px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.settings-panel::-webkit-scrollbar {
+  display: none;
+}
+#dictionary-language {
+  max-width: 190px;
+}
+#dictionary-install {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  text-align: center;
+  background: var(--paper);
 }
 .settings-panel h2 {
   font-size: 14px;
@@ -558,6 +600,11 @@ button svg {
 .settings-panel input {
   width: 150px;
   accent-color: var(--accent);
+}
+.settings-panel input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
 }
 .settings-panel select {
   background: var(--paper);
@@ -730,8 +777,9 @@ dialog p {
 .cm-searchMatch-selected {
   background: #ffd34d99;
 }
-.cm-cursor {
-  border-left-color: var(--ink) !important;
+.cm-content ::selection,
+.cm-content::selection {
+  background: var(--selection);
 }
 .search-count {
   margin-left: 12px;
@@ -791,4 +839,9 @@ dialog p {
   text-decoration-style: wavy;
   text-decoration-color: #d32f2f;
   text-underline-offset: 2px;
+}
+
+#bookmark-menu {
+  position: fixed;
+  right: auto;
 }

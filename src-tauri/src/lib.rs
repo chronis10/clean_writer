@@ -1,3 +1,4 @@
+mod dictionary_packs;
 mod document;
 mod images;
 mod spelling;
@@ -285,6 +286,8 @@ fn checkpoint(
     text: String,
     cursor: usize,
     bookmarks: Vec<Bookmark>,
+    page_starts: Option<Vec<usize>>,
+    page_layout_version: Option<u32>,
     preferences: serde_json::Value,
     state: State<Writer>,
 ) -> Result<(), String> {
@@ -292,6 +295,8 @@ fn checkpoint(
     writer.session.document.text = text;
     writer.session.document.cursor = cursor;
     writer.session.document.bookmarks = bookmarks;
+    writer.session.document.page_starts = page_starts.unwrap_or_default();
+    writer.session.document.page_layout_version = page_layout_version.unwrap_or_default();
     writer.session.preferences = preferences;
     writer.keep_navigation();
     writer.persist()
@@ -441,6 +446,9 @@ pub fn run() {
             spelling::warm_up();
             let dir = app.path().app_data_dir()?;
             fs::create_dir_all(&dir)?;
+            app.manage(dictionary_packs::DictionaryStore::load(
+                dir.join("dictionaries"),
+            ));
             let store = dir.join("session-v2.json");
             let (session, navigation, saved_text) = if store.exists() {
                 let value: serde_json::Value = serde_json::from_slice(&fs::read(&store)?)?;
@@ -613,6 +621,8 @@ pub fn run() {
             update_recent_menu,
             spelling::spelling_suggestions,
             spelling::spelling_misspellings,
+            dictionary_packs::spelling_dictionaries,
+            dictionary_packs::install_spelling_dictionary,
             render_markdown,
             load_image,
             pick_image,
@@ -780,11 +790,18 @@ mod tests {
         let mut state = writer(dir.path());
         state.open(path).unwrap();
         state.session.document.text = "recovered 📝".into();
+        state.session.document.page_starts = vec![0, 5];
+        state.session.document.page_layout_version = 1;
         state.persist().unwrap();
         let stored: serde_json::Value =
             serde_json::from_slice(&fs::read(&state.store).unwrap()).unwrap();
         assert_eq!(stored["session"]["document"]["text"], "recovered 📝");
         assert_eq!(stored["savedText"], "saved");
+        assert_eq!(stored["session"]["document"]["pageLayoutVersion"], 1);
+        assert_eq!(
+            stored["session"]["document"]["pageStarts"],
+            serde_json::json!([0, 5])
+        );
     }
     #[test]
     fn desktop_open_accepts_paths_and_file_urls() {
@@ -827,6 +844,8 @@ mod tests {
         let mut state = writer(dir.path());
         state.open(a.clone()).unwrap();
         state.session.document.cursor = 5;
+        state.session.document.page_starts = vec![0, 6];
+        state.session.document.page_layout_version = 1;
         state.session.document.bookmarks.push(Bookmark {
             id: "mark".into(),
             offset: 3,
@@ -836,6 +855,8 @@ mod tests {
         assert!(state.session.document.bookmarks.is_empty());
         state.open(a).unwrap();
         assert_eq!(state.session.document.cursor, 5);
+        assert_eq!(state.session.document.page_starts, vec![0, 6]);
+        assert_eq!(state.session.document.page_layout_version, 1);
         assert_eq!(state.session.document.bookmarks.len(), 1);
     }
 }

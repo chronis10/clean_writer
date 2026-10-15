@@ -18,3 +18,14 @@ The dictionary data is separate from Clean Writer's MIT-licensed code.
 
 Both dictionaries are embedded in the executable at build time. No
 system dictionary, language pack, or network download is needed at runtime.
+
+Optional dictionary installer
+
+The Settings language catalog is maintained in ../catalog.json and pins a
+revision of https://github.com/LibreOffice/dictionaries. Optional languages
+are downloaded only on the user's Install action. Both Hunspell files and all
+listed license/readme notices are downloaded together. Installed files live
+in the user's app data dictionaries/<locale>/ folder, with license notices in
+licenses/ and provenance in source.json. The declared encoding is converted
+to UTF-8 and SET updated, as for the bundled Greek pair; word lists are unchanged.
+Optional dictionaries are not part of Clean Writer's MIT-licensed code.

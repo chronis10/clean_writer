@@ -1,34 +1,26 @@
+import { markdownBlocks, repairPageStarts } from "./markdown-blocks";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  EditorState,
-  Compartment,
-  StateField,
-  StateEffect,
-} from "@codemirror/state";
+import { EditorState, Compartment } from "@codemirror/state";
 import {
   EditorView,
   keymap,
-  drawSelection,
   panels,
-  Decoration,
   closeHoverTooltips,
-  type DecorationSet,
 } from "@codemirror/view";
 import {
   history,
+  invertedEffects,
   isolateHistory,
-  historyKeymap,
-  defaultKeymap,
   indentWithTab,
   undo,
   redo,
 } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
+import { markdownHighlighting } from "./syntax-theme";
 import {
   search,
-  searchKeymap,
   openSearchPanel,
   findNext,
   findPrevious,
@@ -46,19 +38,22 @@ import {
   type Preferences,
   type Rendered,
 } from "./model";
-import { paginate, stylePaper, fonts, type Page } from "./pages";
+import {
+  paginate,
+  previewContainers,
+  stylePaper,
+  fonts,
+  type Page,
+} from "./pages";
 import { resolveImages, type LoadedImage } from "./images";
 import { icon } from "./icons";
 import { findPanel } from "./find-panel";
-import { spellingHover } from "./spelling";
+import { spellingHover, resetSpelling } from "./spelling";
+import { dictionarySettings } from "./dictionaries";
 import { insertCommands, markdownInsertion } from "./insertions";
-import {
-  sourcePagination,
-  sourcePageAt,
-  PAGE_GAP,
-  type SourcePage,
-} from "./source-pages";
+import { sourcePageAt, type SourcePage } from "./source-pages";
 import { PAGE_HEIGHT, PAGE_WIDTH } from "./pages";
+import { PagedEditor, pageRangesField, pageRangesEffect } from "./paged-editor";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -68,9 +63,9 @@ app.innerHTML = `
 <div id="find-host"></div>
 <div id="file-menu" class="popover" hidden><button id="new">New</button><button id="open">Open</button><div id="recent"></div><button id="save">Save</button><button id="save-as">Save As…</button><button id="export">Export PDF…</button><button id="insert-image">Insert image…</button></div>
 <div id="bookmark-menu" class="popover" hidden></div>
-<div id="settings-panel" class="popover settings-panel" hidden><h2>Settings</h2><h3>Typography</h3><label>Font<select id="font"><option value="Serif">Serif</option><option value="Sans">Sans Serif</option><option value="Mono">Monospaced</option></select></label><label>Size<input id="size" type="range" min="11" max="22" step="1"><output id="size-value"></output></label><h3>Page margins</h3><label>Margin<select id="margin"><option value="45">Narrow — 45 pt</option><option value="64">Normal — 64 pt</option><option value="85">Wide — 85 pt</option></select><output id="margin-value" hidden></output></label><hr><p>Draft recovery is automatic. Use File → Save to write your changes to a file.</p></div>
-<div id="notice" role="status" hidden></div><main id="canvas" aria-label="Writing canvas"><div id="document-frame"><div id="source-host"><article id="source-paper" class="source-paper"><div id="source-background" aria-hidden="true"></div><div id="editor" aria-label="Markdown editor"></div></article></div><div id="preview-host" hidden></div></div></main>
-<footer class="statusbar"><div><span id="word-count">0 words</span><span class="status-separator">·</span><span id="page-count">1 page</span><span id="search-count" class="search-count sr-only" hidden></span></div><div class="zoom-controls"><button id="zoom-out" aria-label="Zoom out">${icon("minusZoom")}</button><input id="zoom" type="range" min="50" max="200" step="10" aria-label="Page zoom"><button id="zoom-in" aria-label="Zoom in">${icon("plusZoom")}</button><button id="zoom-value" title="Reset zoom to 100%">100%</button></div></footer></div>
+<div id="settings-panel" class="popover settings-panel" hidden><h2>Settings</h2><h3>Typography</h3><label>Editor font<select id="font"><option value="Serif">Serif</option><option value="Sans">Sans Serif</option><option value="Mono">Monospaced</option></select></label><label>Preview font<select id="preview-font"><option value="Serif">Serif</option><option value="Sans">Sans Serif</option><option value="Mono">Monospaced</option></select></label><label>Size<input id="size" type="range" min="11" max="22" step="1"><output id="size-value"></output></label><h3>Page margins</h3><label>Margin<select id="margin"><option value="45">Narrow — 45 pt</option><option value="64">Normal — 64 pt</option><option value="85">Wide — 85 pt</option></select><output id="margin-value" hidden></output></label><hr><h3>Saving</h3><label>Autosave<input id="autosave" type="checkbox" role="switch"></label><p>Save changes to your Markdown file automatically after one second of inactivity. Untitled documents keep automatic draft recovery until you choose File → Save.</p><div id="dictionary-settings"></div></div>
+<div id="notice" role="status" hidden></div><main id="canvas" aria-label="Writing canvas"><div id="document-frame"><div id="source-host"></div><div id="preview-host" hidden></div></div></main>
+<div id="document-state" hidden aria-hidden="true"></div><footer class="statusbar"><div><span id="word-count">0 words</span><span class="status-separator">·</span><span id="page-count">1 page</span><span id="search-count" class="search-count sr-only" hidden></span></div><div class="zoom-controls"><button id="zoom-out" aria-label="Zoom out">${icon("minusZoom")}</button><input id="zoom" type="range" min="50" max="200" step="10" aria-label="Page zoom"><button id="zoom-in" aria-label="Zoom in">${icon("plusZoom")}</button><button id="zoom-value" title="Reset zoom to 100%">100%</button></div></footer></div>
 <dialog id="confirm-dialog"><form method="dialog"><h2>Keep your changes?</h2><p id="confirm-message">Save this document before continuing, or discard its unsaved changes.</p><div class="dialog-actions"><button value="cancel">Cancel</button><button value="discard">Discard</button><button value="save" class="primary">Save</button></div></form></dialog>
 <dialog id="error-dialog"><form method="dialog"><h2>File operation failed</h2><p id="error-message"></p><div class="dialog-actions"><button class="primary">OK</button></div></form></dialog>`;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
@@ -89,6 +84,29 @@ let renderTimer: ReturnType<typeof setTimeout> | undefined,
   currentPreviewPage = 0,
   requestedOpen = false;
 let sourcePages: SourcePage[] = [{ from: 0, to: 0, section: 0 }];
+let selectedSidebarPageKey: string | null = null;
+let pendingPreviewJump = false;
+interface ReadingPosition {
+  key: string;
+  canvasTop: number;
+  fraction: number;
+  sourceFrom?: number;
+  blockFraction?: number;
+  clip: number;
+}
+let pendingReadingPosition: ReadingPosition | null = null;
+let toggleReadingPosition: ReadingPosition | null = null;
+let lastRenderedGeneration = -1;
+let readingPageKey: string | null = null;
+let restoredCanvasTop: number | null = null;
+let restoredBody: HTMLElement | null = null;
+let restoredBodyTop = 0;
+let restoredBodyHeight = 0;
+let sidebarFollowFrame = 0;
+let forceSidebarFollow = false;
+let lastFollowedPageKey: string | null = null;
+let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+let autosaving = false;
 let recoveryFailed = false,
   saveFailed = false;
 let tail: Promise<unknown> = Promise.resolve();
@@ -111,11 +129,11 @@ const editorTheme = () =>
       },
       ".cm-content": {
         padding: "0",
-        minHeight: "0",
+        minHeight: "100%",
         caretColor: "var(--ink)",
       },
       ".cm-scroller": {
-        overflow: "visible",
+        overflow: "auto",
         fontFamily: "inherit",
         lineHeight: "1.2",
       },
@@ -126,35 +144,38 @@ const editorTheme = () =>
     },
     { dark: prefs.dark },
   );
-const pageLayoutEffect = StateEffect.define<DecorationSet>();
-const breaks = StateField.define<DecorationSet>({
-  create() {
-    return Decoration.none;
-  },
-  update(value, transaction) {
-    for (const effect of transaction.effects)
-      if (effect.is(pageLayoutEffect)) return effect.value;
-    return value.map(transaction.changes);
-  },
-  provide: (field) => EditorView.decorations.from(field),
-});
+const rangesField = pageRangesField(
+  () => prefs,
+  () => doc.pageStarts,
+);
 function layoutSource() {
-  const layout = sourcePagination(doc.text, prefs);
-  sourcePages = layout.pages;
-  editor.dispatch({ effects: pageLayoutEffect.of(layout.decorations) });
-  const backgrounds = sourcePages.map((_, index) => {
-    const paper = document.createElement("div");
-    paper.className = "paper source-page-background";
-    paper.style.top = `${index * (PAGE_HEIGHT + PAGE_GAP)}px`;
-    const number = document.createElement("div");
-    number.className = "page-number";
-    number.textContent = String(index + 1);
-    paper.append(number);
-    return paper;
-  });
-  $("source-background").replaceChildren(...backgrounds);
-  $("source-paper").style.minHeight =
-    `${sourcePages.length * PAGE_HEIGHT + (sourcePages.length - 1) * PAGE_GAP}px`;
+  pageEditor.sync();
+  sourcePages = pageEditor.ranges;
+  doc.pageStarts = sourcePages.map((page) => page.from);
+  doc.pageLayoutVersion = 1;
+}
+function pageExtensions() {
+  return [
+    markdown(),
+    markdownHighlighting,
+    spellingHover(
+      (word: string) => api<string[]>("spelling_suggestions", { word }),
+      (words: string[]) => api<string[]>("spelling_misspellings", { words }),
+      () => desktop && !prefs.preview,
+    ),
+    EditorView.lineWrapping,
+    EditorView.contentAttributes.of({
+      spellcheck: "false",
+      autocorrect: "off",
+      "aria-label": "Markdown source",
+    }),
+    keymap.of([indentWithTab]),
+    theme.of(editorTheme()),
+    editability.of([
+      EditorState.readOnly.of(busy || !ready),
+      EditorView.editable.of(!busy && ready),
+    ]),
+  ];
 }
 function editorState() {
   return EditorState.create({
@@ -162,41 +183,29 @@ function editorState() {
     selection: { anchor: doc.cursor },
     extensions: [
       history(),
-      drawSelection(),
-      markdown(),
-      spellingHover(
-        (word) => api<string[]>("spelling_suggestions", { word }),
-        (words) => api<string[]>("spelling_misspellings", { words }),
-        () => desktop && !prefs.preview,
+      rangesField,
+      invertedEffects.of((tr) =>
+        tr.docChanged
+          ? [pageRangesEffect.of(tr.startState.field(rangesField))]
+          : [],
       ),
       search({ top: true, createPanel: findPanel }),
       panels({ topContainer: $("find-host") }),
-      breaks,
-      EditorView.lineWrapping,
-      EditorView.contentAttributes.of({
-        spellcheck: "false",
-        autocorrect: "off",
-        "aria-label": "Markdown source",
-      }),
-      keymap.of([
-        indentWithTab,
-        ...defaultKeymap,
-        ...historyKeymap,
-        ...searchKeymap,
-      ]),
-      theme.of(editorTheme()),
       editability.of([
         EditorState.readOnly.of(false),
-        EditorView.editable.of(true),
+        EditorView.editable.of(false),
       ]),
       EditorView.updateListener.of((update) => {
         if (!ready) return;
+        sourcePages = update.state.field(rangesField);
+        doc.pageStarts = sourcePages.map((page) => page.from);
         updateSearchCount();
         if (update.docChanged) {
           const text = update.state.doc.toString();
           doc.bookmarks = moveAnchors(doc.text, text, doc.bookmarks);
           doc.text = text;
           saveFailed = false;
+          scheduleAutosave();
           scheduleRender();
           scheduleRecovery();
           updateBookmarks();
@@ -204,6 +213,12 @@ function editorState() {
         }
         if (update.selectionSet || update.docChanged) {
           doc.cursor = update.state.selection.main.head;
+          if (!prefs.preview && update.selectionSet) {
+            readingPageKey =
+              pageEditor.ranges[sourcePageAt(sourcePages, doc.cursor)]?.key ??
+              null;
+            followVisiblePage(true);
+          }
           updateBookmarks();
           scheduleRecovery();
         }
@@ -211,7 +226,14 @@ function editorState() {
     ],
   });
 }
-const editor = new EditorView({ parent: $("editor"), state: editorState() });
+const pageEditor = new PagedEditor(
+  $("source-host"),
+  $("document-state"),
+  editorState(),
+  rangesField,
+  pageExtensions,
+);
+const editor = pageEditor.master;
 
 function updateSearchCount() {
   const query = getSearchQuery(editor.state);
@@ -254,7 +276,6 @@ async function run(job: () => Promise<unknown>) {
     updateStatus();
     if (requestedOpen) {
       requestedOpen = false;
-      let sourcePages: SourcePage[] = [{ from: 0, to: 0, section: 0 }];
       void run(() => replaceDocument("open_requested"));
     }
   }
@@ -284,6 +305,8 @@ async function checkpoint() {
       text: doc.text,
       cursor: doc.cursor,
       bookmarks: doc.bookmarks,
+      pageStarts: doc.pageStarts,
+      pageLayoutVersion: doc.pageLayoutVersion,
       preferences: prefs,
     });
     recoveryFailed = false;
@@ -304,28 +327,64 @@ function scheduleRecovery() {
     200,
   );
 }
+function scheduleAutosave() {
+  clearTimeout(autosaveTimer);
+  if (!desktop || !prefs.autosave || !doc.path || !dirty() || saveFailed)
+    return;
+  autosaveTimer = setTimeout(() => {
+    void serial(async () => {
+      if (!ready || !prefs.autosave || !doc.path || !dirty() || saveFailed)
+        return;
+      if (busy) {
+        scheduleAutosave();
+        return;
+      }
+      autosaving = true;
+      updateStatus();
+      try {
+        await checkpoint();
+        const snapshot = await api<Snapshot | null>("save_document", {
+          saveAs: false,
+        });
+        if (snapshot) savedText = snapshot.savedText;
+        saveFailed = false;
+      } catch (e) {
+        saveFailed = true;
+        notice(`Autosave failed. Your edits remain in the editor. ${e}`, true);
+      } finally {
+        autosaving = false;
+        updateStatus();
+        if (dirty() && !saveFailed) scheduleAutosave();
+      }
+    }).catch(error);
+  }, 1000);
+}
 function updateStatus() {
-  if (editor.state.facet(EditorState.readOnly) !== (busy || !ready))
-    editor.dispatch({
-      effects: editability.reconfigure([
-        EditorState.readOnly.of(busy || !ready),
-        EditorView.editable.of(!busy && ready),
-      ]),
-    });
+  for (const view of [editor, ...pageEditor.views]) {
+    if (view.state.facet(EditorState.readOnly) !== (busy || !ready))
+      view.dispatch({
+        effects: editability.reconfigure([
+          EditorState.readOnly.of(busy || !ready),
+          EditorView.editable.of(view !== editor && !busy && ready),
+        ]),
+      });
+  }
   $("filename").textContent = fileName(doc.path);
   $("save-state").textContent = busy
     ? "Working…"
-    : recoveryFailed
-      ? "Recovery unavailable"
-      : saveFailed
-        ? "Save failed"
-        : dirty()
-          ? doc.path
-            ? "Unsaved changes"
-            : "Recovered locally"
-          : doc.path
-            ? "Saved"
-            : "Local draft";
+    : autosaving
+      ? "Saving…"
+      : recoveryFailed
+        ? "Recovery unavailable"
+        : saveFailed
+          ? "Save failed"
+          : dirty()
+            ? doc.path
+              ? "Unsaved changes"
+              : "Recovered locally"
+            : doc.path
+              ? "Saved"
+              : "Local draft";
   $("save-state").classList.toggle("unsaved", dirty());
   $("dirty-dot").hidden = !dirty();
   for (const id of ["new", "open", "save", "save-as", "export", "insert-image"])
@@ -354,7 +413,9 @@ function updateSettings() {
   $("source-host").hidden = prefs.preview;
   $("preview-host").hidden = !prefs.preview;
 
+  $<HTMLInputElement>("autosave").checked = prefs.autosave;
   $<HTMLSelectElement>("font").value = prefs.font;
+  $<HTMLSelectElement>("preview-font").value = prefs.previewFont;
   $<HTMLInputElement>("size").value = String(prefs.size);
   $<HTMLSelectElement>("margin").value = String(prefs.margin);
   $("size-value").textContent = `${prefs.size} pt`;
@@ -363,15 +424,17 @@ function updateSettings() {
   $("zoom-value").textContent = `${Math.round(prefs.zoom * 100)}%`;
   // Thumbnails live outside the document hosts, so share typography explicitly.
   // Keep their scale fixed while the main document zooms independently.
-  stylePaper($("thumbnails"), prefs);
+  stylePaper($("thumbnails"), prefs, prefs.preview);
   for (const host of [$("source-host"), $("preview-host")]) {
-    stylePaper(host, prefs);
+    stylePaper(host, prefs, host.id === "preview-host");
     host.style.transform = `scale(${prefs.zoom})`;
   }
   updateDocumentFrame();
-  editor.dispatch({ effects: theme.reconfigure(editorTheme()) });
-  if (prefs.preview) editor.dispatch({ effects: closeHoverTooltips });
-  editor.requestMeasure();
+  for (const view of pageEditor.views) {
+    view.dispatch({ effects: theme.reconfigure(editorTheme()) });
+    if (prefs.preview) view.dispatch({ effects: closeHoverTooltips });
+    view.requestMeasure();
+  }
 }
 // Transforms keep browser text hit-testing and CodeMirror in the same coordinate
 // system. Reserve the scaled bounds separately, since transforms do not affect flow.
@@ -384,25 +447,282 @@ const documentSizeObserver = new ResizeObserver(updateDocumentFrame);
 documentSizeObserver.observe($("source-host"));
 documentSizeObserver.observe($("preview-host"));
 
+function visiblePageIndex() {
+  const canvas = $("canvas").getBoundingClientRect();
+  const host = $(prefs.preview ? "preview-host" : "source-host");
+  let fallback = -1;
+  const readingTop = canvas.top + Math.min(80, canvas.height / 3);
+  for (const paper of host.children as HTMLCollectionOf<HTMLElement>) {
+    const rect = paper.getBoundingClientRect();
+    if (rect.bottom <= canvas.top || rect.top >= canvas.bottom) continue;
+    const index = prefs.preview
+      ? pageEditor.ranges.findIndex((p) => p.key === paper.dataset.pageKey)
+      : Number(paper.dataset.pageIndex);
+    if (index < 0) continue;
+    const key = pageEditor.ranges[index]?.key;
+    if (key === readingPageKey) return index;
+    if (fallback < 0 && rect.bottom > readingTop) fallback = index;
+  }
+  return fallback;
+}
+function followVisiblePage(force = false) {
+  forceSidebarFollow ||= force;
+  if (sidebarFollowFrame) return;
+  sidebarFollowFrame = requestAnimationFrame(() => {
+    sidebarFollowFrame = 0;
+    const forced = forceSidebarFollow;
+    forceSidebarFollow = false;
+    if (!ready) return;
+    const index = visiblePageIndex(),
+      key = pageEditor.ranges[index]?.key;
+    if (!key) return;
+    if (selectedSidebarPageKey !== key) {
+      selectedSidebarPageKey = key;
+      updateBookmarks();
+    }
+    if (!prefs.sidebar || (!forced && key === lastFollowedPageKey)) return;
+    const thumbnails = $("thumbnails");
+    const thumbnail = thumbnails.children[index] as HTMLElement | undefined;
+    if (!thumbnail) return;
+    lastFollowedPageKey = key;
+    const viewport = thumbnails.getBoundingClientRect(),
+      rect = thumbnail.getBoundingClientRect();
+    if (rect.top < viewport.top)
+      thumbnails.scrollTop += rect.top - viewport.top;
+    else if (rect.bottom > viewport.bottom)
+      thumbnails.scrollTop += rect.bottom - viewport.bottom;
+  });
+}
+function captureReadingPosition(): ReadingPosition | null {
+  const canvas = $("canvas"),
+    bounds = canvas.getBoundingClientRect();
+  const host = $(prefs.preview ? "preview-host" : "source-host");
+  let best: HTMLElement | null = null;
+  const readingTop = bounds.top + Math.min(80, bounds.height / 3);
+  for (const paper of host.children as HTMLCollectionOf<HTMLElement>) {
+    const rect = paper.getBoundingClientRect();
+    if (rect.bottom > readingTop && rect.top < bounds.bottom) {
+      best = paper;
+      break;
+    }
+  }
+  const explicit = [...host.children].find((paper) => {
+    const el = paper as HTMLElement;
+    const index = prefs.preview
+      ? pageEditor.ranges.findIndex((p) => p.key === el.dataset.pageKey)
+      : Number(el.dataset.pageIndex);
+    const key = pageEditor.ranges[index]?.key;
+    const rect = el.getBoundingClientRect();
+    return (
+      key === readingPageKey &&
+      rect.bottom > bounds.top &&
+      rect.top < bounds.bottom
+    );
+  });
+  if (explicit) best = explicit as HTMLElement;
+  if (!best) return pendingReadingPosition;
+  const index = prefs.preview
+    ? pageEditor.ranges.findIndex((p) => p.key === best!.dataset.pageKey)
+    : Number(best.dataset.pageIndex);
+  const key = pageEditor.ranges[index]?.key;
+  if (!key) return pendingReadingPosition;
+  const body = best.querySelector<HTMLElement>(
+    prefs.preview ? ".page-body" : ".cm-scroller",
+  )!;
+  const scale = best.getBoundingClientRect().width / PAGE_WIDTH;
+  const visibleTop = Math.max(bounds.top + 8, body.getBoundingClientRect().top);
+  const clip = (visibleTop - body.getBoundingClientRect().top) / scale;
+  const position: ReadingPosition = {
+    key,
+    clip,
+    canvasTop: canvas.scrollTop,
+    fraction:
+      body.scrollTop / Math.max(1, body.scrollHeight - body.clientHeight),
+  };
+  if (prefs.preview) {
+    const blocks = [
+      ...body.querySelectorAll<HTMLElement>(".source-block[data-source-from]"),
+    ];
+    const top = visibleTop;
+    const block =
+      blocks.find((el) => el.getBoundingClientRect().bottom > top + 1) ??
+      blocks.at(-1);
+    if (block) {
+      const rect = block.getBoundingClientRect();
+      position.sourceFrom = Number(block.dataset.sourceFrom);
+      position.blockFraction = Math.max(
+        0,
+        Math.min(1, (top - rect.top) / Math.max(1, rect.height)),
+      );
+    }
+  } else {
+    const view = pageEditor.views[index],
+      line = view.lineBlockAtHeight((body.scrollTop + clip) * view.scaleY);
+    const block = markdownBlocks(view.state.doc.toString()).find(
+      (b) => line.from >= b.from && line.from < b.to,
+    );
+    if (block) {
+      const first = view.lineBlockAt(block.from),
+        last = view.lineBlockAt(Math.max(block.from, block.to - 1));
+      position.sourceFrom = block.from;
+      position.blockFraction = Math.max(
+        0,
+        Math.min(
+          1,
+          ((body.scrollTop + clip) * view.scaleY - first.top) /
+            Math.max(1, last.bottom - first.top),
+        ),
+      );
+    }
+  }
+  return position;
+}
+function restoreReadingPosition(position: ReadingPosition, focus = false) {
+  const index = pageEditor.ranges.findIndex((p) => p.key === position.key);
+  const host = $(prefs.preview ? "preview-host" : "source-host");
+  const paper = host.children[index] as HTMLElement | undefined;
+  if (!paper || (prefs.preview && paper.dataset.pageKey !== position.key))
+    return false;
+  const body = paper.querySelector<HTMLElement>(
+    prefs.preview ? ".page-body" : ".cm-scroller",
+  )!;
+  if (focus && !prefs.preview && pageEditor.activeIndex === index)
+    pageEditor.views[index].contentDOM.focus({ preventScroll: true });
+  updateDocumentFrame();
+  let mapped = false;
+  let scroll =
+    position.fraction * Math.max(0, body.scrollHeight - body.clientHeight);
+  if (position.sourceFrom !== undefined) {
+    if (prefs.preview) {
+      const blocks = [
+        ...body.querySelectorAll<HTMLElement>(
+          ".source-block[data-source-from]",
+        ),
+      ];
+      const block =
+        blocks.find(
+          (el) => Number(el.dataset.sourceFrom) === position.sourceFrom,
+        ) ??
+        blocks.find(
+          (el) =>
+            Number(el.dataset.sourceFrom) <= position.sourceFrom! &&
+            Number(el.dataset.sourceTo) > position.sourceFrom!,
+        );
+      if (block) {
+        mapped = true;
+        const rect = block.getBoundingClientRect(),
+          scale = paper.getBoundingClientRect().width / PAGE_WIDTH;
+        scroll =
+          body.scrollTop +
+          (rect.top - body.getBoundingClientRect().top) / scale +
+          ((position.blockFraction ?? 0) * rect.height) / scale -
+          position.clip;
+      }
+    } else {
+      const view = pageEditor.views[index],
+        length = view.state.doc.length;
+      const blocks = markdownBlocks(view.state.doc.toString());
+      const block = blocks.find(
+        (b) => position.sourceFrom! >= b.from && position.sourceFrom! < b.to,
+      );
+      if (block) {
+        mapped = true;
+        const first = view.lineBlockAt(Math.min(length, block.from)),
+          last = view.lineBlockAt(
+            Math.min(length, Math.max(block.from, block.to - 1)),
+          );
+        scroll =
+          (first.top +
+            (position.blockFraction ?? 0) * (last.bottom - first.top)) /
+            view.scaleY -
+          position.clip;
+      }
+    }
+  }
+  body.scrollTop = scroll;
+  restoredBody = body;
+  restoredBodyTop = body.scrollTop;
+  restoredBodyHeight = body.scrollHeight;
+  readingPageKey = position.key;
+  const scale = paper.getBoundingClientRect().width / PAGE_WIDTH;
+  restoredCanvasTop =
+    position.canvasTop + (mapped ? (scroll - body.scrollTop) * scale : 0);
+  $("canvas").scrollTop = restoredCanvasTop;
+  currentPreviewPage = index;
+  followVisiblePage(true);
+  return true;
+}
 function changeSettings(change: Partial<Preferences>, render = true) {
+  const switching =
+    change.preview !== undefined && change.preview !== prefs.preview;
+  const position = switching
+    ? (toggleReadingPosition ??
+      captureReadingPosition() ??
+      pendingReadingPosition)
+    : null;
+  toggleReadingPosition = null;
+  if (switching) {
+    pendingPreviewJump = false;
+    pendingReadingPosition = null;
+  }
   if (change.preview === true) imageCache.clear();
   prefs = preferences({ ...prefs, ...change });
   updateSettings();
+  if (switching) {
+    restoredCanvasTop = $("canvas").scrollTop;
+    restoredBody = null;
+  }
+  if (position) {
+    restoreReadingPosition(position, !prefs.preview);
+    pendingReadingPosition = position;
+    requestAnimationFrame(() => {
+      if (pendingReadingPosition !== position) return;
+      restoreReadingPosition(position);
+      if (prefs.preview && lastRenderedGeneration === renderGeneration)
+        pendingReadingPosition = null;
+    });
+    if (!prefs.preview) {
+      const index = pageEditor.ranges.findIndex(
+        (page) => page.key === position.key,
+      );
+      pageEditor.views[index]?.requestMeasure({
+        read: () => null,
+        write: () =>
+          requestAnimationFrame(() => {
+            if (pendingReadingPosition === position && !prefs.preview) {
+              restoreReadingPosition(position);
+              pendingReadingPosition = null;
+            }
+          }),
+      });
+    }
+  }
   if (change.preview !== undefined) updateThumbnails();
+  if (
+    change.preview !== undefined ||
+    change.sidebar === true ||
+    change.zoom !== undefined
+  )
+    followVisiblePage(true);
   scheduleRecovery();
+  if (change.autosave !== undefined) scheduleAutosave();
   if (render) scheduleRender();
 }
 function applySnapshot(snapshot: Snapshot, replaceText = true) {
   if (replaceText) {
     ready = false;
+    selectedSidebarPageKey = null;
+    lastFollowedPageKey = null;
+    pendingReadingPosition = null;
+    toggleReadingPosition = null;
+    readingPageKey = null;
     doc = snapshot.session.document;
     doc.cursor = Math.min(doc.text.length, Math.max(0, doc.cursor));
     doc.bookmarks = doc.bookmarks.map((b) => ({
       ...b,
       offset: Math.min(doc.text.length, Math.max(0, b.offset)),
     }));
-    // Recreate using the established extension set below to reset undo history per document.
-    resetEditor();
+    // Reset the page editors after loading this document's typography below.
     ready = true;
   } else {
     doc.path = snapshot.session.document.path;
@@ -410,6 +730,12 @@ function applySnapshot(snapshot: Snapshot, replaceText = true) {
   savedText = snapshot.savedText;
   recent = snapshot.session.recent;
   prefs = preferences(snapshot.session.preferences);
+  if (replaceText) {
+    if (doc.pageLayoutVersion !== 1)
+      doc.pageStarts = repairPageStarts(doc.text, doc.pageStarts);
+    resetEditor();
+    layoutSource();
+  }
   saveFailed = false;
   notice("");
   updateSettings();
@@ -417,12 +743,15 @@ function applySnapshot(snapshot: Snapshot, replaceText = true) {
   updateBookmarks();
   updateStatus();
   scheduleRender();
+  scheduleAutosave();
 }
 function resetEditor() {
-  editor.setState(editorState());
+  pageEditor.reset(editorState());
+  sourcePages = pageEditor.ranges;
 }
 
 async function save(saveAs = false): Promise<boolean> {
+  clearTimeout(autosaveTimer);
   clearTimeout(recoveryTimer);
   try {
     await checkpoint();
@@ -497,31 +826,42 @@ function updateRecent() {
   }
 }
 function thumbnailBookmarkPage(offset: number) {
-  const sourceIndex = sourcePageAt(sourcePages, offset);
-  // Preview pagination differs from source pagination. Keep source bookmarks
-  // available on their section's first preview page; the marker opens the source.
-  return prefs.preview
-    ? pages.findIndex(
-        (page) => page.section === sourcePages[sourceIndex].section,
-      )
-    : sourceIndex;
+  // Editor and preview share the same independent page identities.
+  return sourcePageAt(sourcePages, offset);
+}
+function selectedSidebarPageIndex() {
+  let index = pageEditor.ranges.findIndex(
+    (page) => page.key === selectedSidebarPageKey,
+  );
+  if (index < 0) {
+    index = pageEditor.activeIndex;
+    selectedSidebarPageKey = pageEditor.ranges[index]?.key ?? null;
+  }
+  return index;
+}
+function currentPageIndex() {
+  const visible = visiblePageIndex();
+  return visible >= 0 ? visible : selectedSidebarPageIndex();
 }
 function updateBookmarks() {
-  const index = sourcePageAt(sourcePages, doc.cursor);
+  const index = currentPageIndex();
   const marked = doc.bookmarks.some(
     (mark) => sourcePageAt(sourcePages, mark.offset) === index,
   );
   $("bookmark-add").classList.toggle("bookmarked", marked);
   $("bookmark-add").title = marked
     ? "Remove this page's bookmark (Ctrl/⌘D)"
-    : "Bookmark this page at the cursor (Ctrl/⌘D)";
+    : "Bookmark this page (Ctrl/⌘D)";
   $("thumbnails")
     .querySelectorAll<HTMLElement>(".thumbnail")
     .forEach((button, pageIndex) => {
       button.classList.toggle(
         "active",
-        pageIndex === (prefs.preview ? currentPreviewPage : index),
+        pageIndex === selectedSidebarPageIndex(),
       );
+      if (pageIndex === selectedSidebarPageIndex())
+        button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
       button.querySelector(".thumbnail-bookmark")?.remove();
       if (
         doc.bookmarks.some(
@@ -548,18 +888,19 @@ function updateBookmarks() {
 }
 function jump(offset: number, pageStart = false) {
   if (prefs.preview) changeSettings({ preview: false }, false);
-  editor.dispatch({
-    selection: { anchor: Math.min(doc.text.length, offset) },
-    effects: EditorView.scrollIntoView(Math.min(doc.text.length, offset), {
-      y: pageStart ? "start" : "nearest",
-      yMargin: pageStart ? prefs.margin * prefs.zoom + 24 : 5,
-    }),
-  });
+  editor.dispatch({ selection: { anchor: Math.min(doc.text.length, offset) } });
+  pageEditor.scrollTo(Math.min(doc.text.length, offset), pageStart);
   editor.focus();
 }
 function bookmark() {
-  const offset = editor.state.selection.main.head;
-  const pageIndex = sourcePageAt(sourcePages, offset);
+  if (!ready || busy) return;
+  const pageIndex = currentPageIndex();
+  const page = pageEditor.ranges[pageIndex];
+  if (!page) return;
+  selectedSidebarPageKey = page.key;
+  const cursor = editor.state.selection.main.head;
+  const offset =
+    sourcePageAt(sourcePages, cursor) === pageIndex ? cursor : page.from;
   const found = doc.bookmarks.some(
     (b) => sourcePageAt(sourcePages, b.offset) === pageIndex,
   );
@@ -579,13 +920,52 @@ function bookmark() {
   scheduleRecovery();
 }
 function addPage() {
-  if (prefs.preview) changeSettings({ preview: false }, false);
-  const selection = editor.state.selection.main;
-  editor.dispatch({
-    changes: { from: selection.from, to: selection.to, insert: "\n\f\n" },
-    selection: { anchor: selection.from + 3 },
-  });
-  editor.focus();
+  if (!ready || busy) return;
+  pendingReadingPosition = null;
+  layoutSource();
+  const visibleIndex = visiblePageIndex();
+  const index = visibleIndex >= 0 ? visibleIndex : selectedSidebarPageIndex();
+  pageEditor.insertPage(index, !prefs.preview);
+  selectedSidebarPageKey = pageEditor.ranges[index + 1].key;
+  if (prefs.preview) {
+    currentPreviewPage = index + 1;
+    pendingPreviewJump = true;
+  }
+  layoutSource();
+  updateThumbnails();
+  updateStatus();
+}
+function removePage(key: string) {
+  if (!ready || busy) return;
+  const index = pageEditor.ranges.findIndex((page) => page.key === key);
+  if (index < 0) return;
+  hidePopovers();
+  pendingReadingPosition = null;
+  pendingPreviewJump = false;
+  const nextIndex = pageEditor.removePage(index, !prefs.preview);
+  selectedSidebarPageKey = pageEditor.ranges[nextIndex].key;
+  readingPageKey = selectedSidebarPageKey;
+  currentPreviewPage = nextIndex;
+  layoutSource();
+  if (prefs.preview) {
+    const keys = new Set(pageEditor.ranges.map((page) => page.key));
+    pages = pages.filter((page) => {
+      if (keys.has(page.element.dataset.pageKey!)) return true;
+      page.element.remove();
+      return false;
+    });
+    pages.forEach((page, i) => {
+      page.element.dataset.sourcePageIndex = String(i);
+      page.element.setAttribute("aria-label", `Preview page ${i + 1}`);
+      page.element.querySelector(".page-number")!.textContent = String(i + 1);
+    });
+    pages[nextIndex]?.element.scrollIntoView({ block: "start" });
+    pendingPreviewJump = true;
+  } else pageEditor.scrollTo(pageEditor.ranges[nextIndex].from, true);
+  updateThumbnails();
+  updateStatus();
+  scheduleRender();
+  scheduleRecovery();
 }
 function scheduleRender() {
   clearTimeout(renderTimer);
@@ -659,7 +1039,15 @@ async function render(generation: number) {
     return;
   }
   const documentPath = doc.path;
-  const result = await api<Rendered>("render_markdown", { text: doc.text });
+  const sourceKeys = pageEditor.ranges.map((page) => page.key);
+  const pageText = sourcePages
+    .map((page) => doc.text.slice(page.from, page.to))
+    .join("\f");
+  const result = await api<Rendered>("render_markdown", { text: pageText });
+  if (result.sections.length !== sourceKeys.length)
+    throw new Error(
+      "Preview must contain exactly one section per source page.",
+    );
   const sections = await resolveImages(
     result.sections,
     prefs,
@@ -671,7 +1059,7 @@ async function render(generation: number) {
   document.body.append(host);
   let next: Page[];
   try {
-    next = paginate(sections, prefs, host);
+    next = previewContainers(sections, prefs, host);
   } catch (e) {
     host.remove();
     throw e;
@@ -680,21 +1068,73 @@ async function render(generation: number) {
     host.remove();
     return;
   }
-  $("preview-host").replaceChildren(...Array.from(host.children));
+  const previewHost = $("preview-host");
+  const existing = new Map(
+    [...previewHost.children].map((element) => [
+      (element as HTMLElement).dataset.pageKey,
+      element as HTMLElement,
+    ]),
+  );
+  next = next.map((page, index) => {
+    const key = sourceKeys[index];
+    const previous = existing.get(key);
+    page.element.dataset.pageKey = key;
+    if (!previous) return page;
+    const body = previous.querySelector<HTMLElement>(".page-body")!;
+    const nextBody = page.element.querySelector<HTMLElement>(".page-body")!;
+    const scrollTop = body.scrollTop,
+      scrollLeft = body.scrollLeft;
+    if (body.innerHTML !== nextBody.innerHTML)
+      body.replaceChildren(...nextBody.childNodes);
+    body.setAttribute("aria-label", nextBody.getAttribute("aria-label")!);
+    body.scrollTop = scrollTop;
+    body.scrollLeft = scrollLeft;
+    previous.dataset.sourcePageIndex = String(index);
+    previous.setAttribute(
+      "aria-label",
+      page.element.getAttribute("aria-label")!,
+    );
+    previous.querySelector(".page-number")!.textContent = String(index + 1);
+    return { ...page, element: previous };
+  });
+  const keep = new Set(next.map((page) => page.element));
+  for (const element of [...previewHost.children])
+    if (!keep.has(element as HTMLElement)) element.remove();
+  next.forEach((page, index) => {
+    const current = previewHost.children[index];
+    if (current !== page.element)
+      previewHost.insertBefore(page.element, current ?? null);
+  });
   host.remove();
   pages = next;
+  lastRenderedGeneration = generation;
+  if (prefs.preview && pendingReadingPosition) {
+    const position = pendingReadingPosition;
+    requestAnimationFrame(() => {
+      if (pendingReadingPosition === position && prefs.preview) {
+        restoreReadingPosition(position);
+        pendingReadingPosition = null;
+      }
+    });
+  }
+  if (prefs.preview && pendingPreviewJump) {
+    pages[currentPreviewPage]?.element.scrollIntoView({ block: "start" });
+    pendingPreviewJump = false;
+  }
   $("word-count").textContent =
     `${result.words.toLocaleString()} ${result.words === 1 ? "word" : "words"}`;
   updateThumbnails();
 }
 function updateThumbnails() {
+  followVisiblePage();
   const visiblePages = prefs.preview ? pages : sourcePages;
   currentPreviewPage = Math.min(
     currentPreviewPage,
-    Math.max(0, pages.length - 1),
+    Math.max(0, sourcePages.length - 1),
   );
   $("page-count").textContent =
     `${visiblePages.length} ${visiblePages.length === 1 ? "page" : "pages"}`;
+  const thumbnailScrollTop = $("thumbnails").scrollTop;
   $("thumbnails").replaceChildren();
   visiblePages.forEach((page, index) => {
     const pageText =
@@ -725,6 +1165,9 @@ function updateThumbnails() {
     label.textContent = String(index + 1);
     button.append(mini, label);
     button.onclick = () => {
+      pendingReadingPosition = null;
+      selectedSidebarPageKey = pageEditor.ranges[index].key;
+      readingPageKey = selectedSidebarPageKey;
       if ("element" in page) {
         currentPreviewPage = index;
         page.element.scrollIntoView({ block: "start" });
@@ -734,16 +1177,23 @@ function updateThumbnails() {
           (b) => thumbnailBookmarkPage(b.offset) === index,
         );
         jump(mark?.offset ?? page.from, !mark);
+        updateBookmarks();
       }
     };
     button.oncontextmenu = (event) => {
       const marks = doc.bookmarks.filter(
         (b) => thumbnailBookmarkPage(b.offset) === index,
       );
-      if (!marks.length) return;
       event.preventDefault();
+      hidePopovers();
+      const pageKey = pageEditor.ranges[index].key;
       const menu = $("bookmark-menu");
       menu.replaceChildren();
+      const remove = document.createElement("button");
+      remove.textContent = "Remove page";
+      remove.disabled = busy || !ready;
+      remove.onclick = () => removePage(pageKey);
+      menu.append(remove);
       for (const mark of marks) {
         const remove = document.createElement("button");
         remove.textContent = "Remove Bookmark";
@@ -756,9 +1206,12 @@ function updateThumbnails() {
         menu.append(remove);
       }
       menu.hidden = false;
+      menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8))}px`;
+      menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8))}px`;
     };
     $("thumbnails").append(button);
   });
+  $("thumbnails").scrollTop = thumbnailScrollTop;
   updateBookmarks();
 }
 async function exportPDF() {
@@ -822,6 +1275,7 @@ function hidePopovers() {
   $("settings-panel").hidden = true;
 }
 async function closeApp() {
+  clearTimeout(autosaveTimer);
   clearTimeout(recoveryTimer);
   let closed = false;
   try {
@@ -846,7 +1300,10 @@ async function closeApp() {
     closed = true;
   } finally {
     // Resume draft recovery if closing was canceled or saving failed.
-    if (!closed && dirty()) scheduleRecovery();
+    if (!closed && dirty()) {
+      scheduleRecovery();
+      scheduleAutosave();
+    }
   }
 }
 const actions: Record<string, () => Promise<unknown>> = {
@@ -883,17 +1340,26 @@ for (const [id, action] of Object.entries(actions))
     hidePopovers();
     void run(action);
   };
+const dictionaries = dictionarySettings($("dictionary-settings"), api, () => {
+  for (const view of pageEditor.views)
+    view.dispatch({ effects: [resetSpelling.of(null), closeHoverTooltips] });
+});
 $("settings").onclick = () => {
   const hidden = $("settings-panel").hidden;
   hidePopovers();
   $("settings-panel").hidden = !hidden;
+  if (hidden) void dictionaries.refresh();
 };
+$<HTMLInputElement>("autosave").onchange = (e) =>
+  changeSettings({ autosave: (e.target as HTMLInputElement).checked }, false);
 $("sidebar-toggle").onclick = () =>
   changeSettings({ sidebar: !prefs.sidebar }, false);
 $("theme").onclick = () => changeSettings({ dark: !prefs.dark }, false);
+$("preview").addEventListener("pointerdown", () => {
+  toggleReadingPosition = captureReadingPosition() ?? pendingReadingPosition;
+});
 $("preview").onclick = () => {
   changeSettings({ preview: !prefs.preview });
-  if (!prefs.preview) editor.focus();
 };
 $("bookmark-add").onclick = bookmark;
 $("find").onclick = () => {
@@ -903,6 +1369,8 @@ $("find").onclick = () => {
 $("add-page").onclick = addPage;
 $<HTMLSelectElement>("font").onchange = (e) =>
   changeSettings({ font: (e.target as HTMLSelectElement).value });
+$<HTMLSelectElement>("preview-font").onchange = (e) =>
+  changeSettings({ previewFont: (e.target as HTMLSelectElement).value });
 for (const key of ["size"] as const)
   $<HTMLInputElement>(key).oninput = (e) =>
     changeSettings({ [key]: Number((e.target as HTMLInputElement).value) });
@@ -920,7 +1388,25 @@ document.addEventListener("click", (e) => {
   if (!(e.target as HTMLElement).closest(".popover,#settings,.thumbnail"))
     hidePopovers();
 });
+for (const host of [$("source-host"), $("preview-host")])
+  host.addEventListener("pointerdown", (event) => {
+    pendingReadingPosition = null;
+    const paper = (event.target as Element).closest<HTMLElement>(
+      ".source-page,.preview-page",
+    );
+    if (paper)
+      readingPageKey =
+        paper.dataset.pageKey ??
+        pageEditor.ranges[Number(paper.dataset.pageIndex)]?.key ??
+        null;
+    followVisiblePage(true);
+  });
 $("preview-host").addEventListener("click", (e) => {
+  const paper = (e.target as HTMLElement).closest<HTMLElement>(".preview-page");
+  if (paper) {
+    currentPreviewPage = Number(paper.dataset.sourcePageIndex);
+    updateBookmarks();
+  }
   const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
   if (link) {
     e.preventDefault();
@@ -979,11 +1465,71 @@ window.addEventListener(
   true,
 );
 $("canvas").addEventListener(
+  "scroll",
+  () => {
+    if (
+      restoredCanvasTop === null ||
+      Math.abs($("canvas").scrollTop - restoredCanvasTop) > 1
+    ) {
+      pendingReadingPosition = null;
+    }
+    followVisiblePage(true);
+  },
+  {
+    passive: true,
+  },
+);
+for (const host of [$("source-host"), $("preview-host")])
+  host.addEventListener(
+    "scroll",
+    (event) => {
+      if (host.hidden) return;
+      const target = event.target as HTMLElement;
+      if (
+        pendingReadingPosition &&
+        restoredBody &&
+        host.contains(restoredBody) &&
+        (target !== restoredBody ||
+          (target.scrollHeight === restoredBodyHeight &&
+            Math.abs(target.scrollTop - restoredBodyTop) > 1))
+      )
+        pendingReadingPosition = null;
+      const paper = (event.target as Element).closest<HTMLElement>(
+        ".source-page,.preview-page",
+      );
+      if (paper)
+        readingPageKey =
+          paper.dataset.pageKey ??
+          pageEditor.ranges[Number(paper.dataset.pageIndex)]?.key ??
+          null;
+      followVisiblePage(true);
+    },
+    {
+      capture: true,
+      passive: true,
+    },
+  );
+$("canvas").addEventListener(
   "wheel",
   (e) => {
+    if (!e.ctrlKey) {
+      pendingReadingPosition = null;
+      const paper = (e.target as Element).closest<HTMLElement>(
+        ".source-page,.preview-page",
+      );
+      readingPageKey = paper
+        ? (paper.dataset.pageKey ??
+          pageEditor.ranges[Number(paper.dataset.pageIndex)]?.key ??
+          null)
+        : null;
+    }
     if (e.ctrlKey) {
       e.preventDefault();
       changeSettings({ zoom: prefs.zoom - e.deltaY * 0.002 }, false);
+    } else if (scrollsWithinPage(e)) {
+      // Let the bounded page consume its own native wheel/trackpad input.
+      // Once it reaches an edge, the canvas can scroll to another page.
+      return;
     } else if (
       !e.shiftKey &&
       e.deltaX === 0 &&
@@ -1006,6 +1552,16 @@ $("canvas").addEventListener(
   },
   { passive: false },
 );
+function scrollsWithinPage(event: WheelEvent) {
+  const scroller = (event.target as Element).closest<HTMLElement>(
+    ".source-page .cm-scroller,.preview-page .page-body",
+  );
+  if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 1)
+    return false;
+  return event.deltaY > 0
+    ? scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 1
+    : event.deltaY < 0 && scroller.scrollTop > 0;
+}
 window.addEventListener("blur", () => {
   if (ready && !busy)
     void serial(async () => {

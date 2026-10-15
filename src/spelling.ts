@@ -13,6 +13,7 @@ import {
 } from "@codemirror/view";
 
 const refreshSpelling = StateEffect.define<null>();
+export const resetSpelling = StateEffect.define<null>();
 const wordPattern = () => /[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)*/gu;
 interface Word {
   word: string;
@@ -48,6 +49,7 @@ export function spellingHover(
 ) {
   const cache = new Map<string, Promise<string[]>>();
   const correctness = new Map<string, boolean>();
+  let revision = 0;
   const pointerDocuments = new WeakMap<
     EditorView,
     EditorView["state"]["doc"]
@@ -57,6 +59,7 @@ export function spellingHover(
       if (!enabled() || pointerDocuments.get(view) !== view.state.doc)
         return null;
       const doc = view.state.doc;
+      const requestedRevision = revision;
       const found = wordAt(view, pos, side);
       if (!found) return null;
       const { word, normalized, from, to } = found;
@@ -71,7 +74,12 @@ export function spellingHover(
         );
       }
       const suggestions = await cache.get(normalized)!;
-      if (!enabled() || view.state.doc !== doc || !suggestions.length)
+      if (
+        !enabled() ||
+        view.state.doc !== doc ||
+        requestedRevision !== revision ||
+        !suggestions.length
+      )
         return null;
       return {
         pos: from,
@@ -144,6 +152,7 @@ export function spellingHover(
       }
       async check() {
         if (!enabled() || this.destroyed) return;
+        const requestedRevision = revision;
         const words = [
           ...new Set(this.visibleWords().map(({ normalized }) => normalized)),
         ]
@@ -152,7 +161,7 @@ export function spellingHover(
         if (!words.length) return;
         try {
           const incorrect = new Set(await check(words));
-          if (this.destroyed) return;
+          if (this.destroyed || requestedRevision !== revision) return;
           if (correctness.size > 4096) correctness.clear();
           for (const word of words) correctness.set(word, !incorrect.has(word));
           this.view.dispatch({ effects: refreshSpelling.of(null) });
@@ -163,14 +172,31 @@ export function spellingHover(
       }
       update(update: ViewUpdate) {
         if (
+          update.transactions.some((tr) =>
+            tr.effects.some((effect) => effect.is(resetSpelling)),
+          )
+        ) {
+          revision++;
+          cache.clear();
+          correctness.clear();
+          this.rebuild();
+          this.schedule();
+        }
+        if (
           update.docChanged ||
           update.viewportChanged ||
+          update.transactions.some((tr) => tr.reconfigured) ||
           update.transactions.some((tr) =>
             tr.effects.some((effect) => effect.is(refreshSpelling)),
           )
         )
           this.rebuild();
-        if (update.docChanged || update.viewportChanged) this.schedule();
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          update.transactions.some((tr) => tr.reconfigured)
+        )
+          this.schedule();
       }
       destroy() {
         this.destroyed = true;

@@ -17,6 +17,8 @@ pub struct Document {
     pub text: String,
     pub cursor: usize,
     pub bookmarks: Vec<Bookmark>,
+    pub page_starts: Vec<usize>,
+    pub page_layout_version: u32,
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase", default)]
@@ -82,24 +84,54 @@ fn prepare_callouts(source: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+fn source_offset(original: &str, prepared: &str, offset: usize) -> usize {
+    let mut prepared_start = 0;
+    let mut original_start = 0;
+    for (line, source) in prepared.split('\n').zip(original.split('\n')) {
+        if offset <= prepared_start + line.len() {
+            let added = line.len().saturating_sub(source.len());
+            let local = offset
+                .saturating_sub(prepared_start + added)
+                .min(source.len());
+            return original_start + source[..local].encode_utf16().count();
+        }
+        prepared_start += line.len() + 1;
+        original_start += source.encode_utf16().count() + 1;
+    }
+    original.encode_utf16().count()
+}
+
 pub fn render(text: &str) -> Rendered {
     let callout = Regex::new(r"(?i)<blockquote>\n<p>\[!(NOTE|TODO)\](?:\s*<br\s*/?>)?\s*").unwrap();
+    let image_source = Regex::new(r"(?i)(<img\b[^>]*?\s)src\s*=").unwrap();
     let mut words = 0;
     let sections = text.split('\u{000c}').map(|section| {
         let mut output = String::new();
         let prepared = prepare_callouts(section);
-        let events = Parser::new_ext(&prepared, Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS).map(|event| {
-            match event {
-                Event::Text(ref value) | Event::Code(ref value) => {
-                    words += value.split_whitespace().filter(|word| !matches!(*word, "[!NOTE]" | "[!TODO]")).count();
-                }
-                _ => {}
+        let mut depth = 0;
+        let events = Parser::new_ext(&prepared, Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS).into_offset_iter().flat_map(|(event, span)| {
+            if let Event::Text(ref value) | Event::Code(ref value) = event {
+                words += value.split_whitespace().filter(|word| !matches!(*word, "[!NOTE]" | "[!TODO]")).count();
             }
-            // Treat source HTML as literal text. Never execute user document HTML.
-            match event { Event::SoftBreak => Event::HardBreak, Event::Html(value) | Event::InlineHtml(value) => Event::Text(value), other => other }
+            let mut result = Vec::with_capacity(2);
+            if matches!(event, Event::Start(_)) {
+                if depth == 0 {
+                    let from = source_offset(section, &prepared, span.start);
+                    let to = source_offset(section, &prepared, span.end);
+                    result.push(Event::Html(format!("<div class=\"source-block\" data-source-from=\"{from}\" data-source-to=\"{to}\">\n").into()));
+                }
+                depth += 1;
+            }
+            let end = matches!(event, Event::End(_));
+            result.push(match event { Event::SoftBreak => Event::HardBreak, other => other });
+            if end {
+                depth -= 1;
+                if depth == 0 { result.push(Event::Html("</div>\n".into())); }
+            }
+            result
         });
         html::push_html(&mut output, events);
-        output = output.replace("<img src=", "<img data-image-source=");
+        output = image_source.replace_all(&output, "${1}data-image-source=").into_owned();
         callout.replace_all(&output, |caps: &regex::Captures| {
             let kind = caps[1].to_ascii_lowercase();
             format!("<blockquote class=\"callout {kind}\"><p><strong class=\"callout-label\">{}</strong><br>", if kind == "note" { "Note" } else { "To do" })
@@ -173,8 +205,33 @@ mod tests {
         assert!(render("first\nsecond").sections[0].contains("<br />"));
     }
     #[test]
-    fn html_is_literal() {
-        assert!(!render("<script>alert(1)</script>").sections[0].contains("<script>"));
+    fn html_images_render_and_code_remains_literal() {
+        let source = r#"<p align="center"> <img src="ssl-pretraining.png" alt="Raman self-supervised pretraining architecture" width="750"> </p>"#;
+        let html = &render(source).sections[0];
+        assert!(html.contains("<p align=\"center\">"));
+        assert!(html.contains("data-image-source=\"ssl-pretraining.png\""));
+        assert!(html.contains("width=\"750\""));
+        assert!(!html.contains("<img src="));
+        let fenced = render(&format!("```html\n{source}\n```"));
+        assert!(fenced.sections[0].contains("&lt;p"));
+        assert!(!fenced.sections[0].contains("<img"));
+        let reordered = render("<IMG alt='Example' SRC='image.png' width='100'>");
+        assert!(reordered.sections[0].contains("data-image-source='image.png'"));
+    }
+    #[test]
+    fn rendered_blocks_map_to_original_utf16_source() {
+        let text = "📝 Intro.\n\n```bash\ncommand\n```";
+        let html = &render(text).sections[0];
+        assert!(html.contains("data-source-from=\"0\" data-source-to=\"10\""));
+        let start = text.find("```bash").unwrap();
+        let offset = text[..start].encode_utf16().count();
+        assert!(html.contains(&format!("data-source-from=\"{offset}\"")));
+        assert!(html.contains("<pre><code class=\"language-bash\">command"));
+        let note = "[!NOTE]\nRemember this\n\nAfter.";
+        let html = &render(note).sections[0];
+        assert!(html.contains("callout note"));
+        let start = note.find("After.").unwrap();
+        assert!(html.contains(&format!("data-source-from=\"{start}\"")));
     }
     #[test]
     fn writes_replace_unicode_without_truncation() {

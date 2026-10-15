@@ -8,12 +8,16 @@ export interface Document {
   text: string;
   cursor: number;
   bookmarks: Bookmark[];
+  pageStarts?: number[];
+  pageLayoutVersion?: number;
 }
 export interface Preferences {
+  autosave: boolean;
   dark: boolean;
   preview: boolean;
   sidebar: boolean;
   font: string;
+  previewFont: string;
   size: number;
   margin: number;
   zoom: number;
@@ -33,10 +37,12 @@ export interface Rendered {
   words: number;
 }
 export const defaults: Preferences = {
+  autosave: true,
   dark: false,
   preview: false,
   sidebar: true,
   font: "Serif",
+  previewFont: "Serif",
   size: 15,
   margin: 64,
   zoom: 1,
@@ -47,12 +53,18 @@ export function preferences(value: Partial<Preferences>): Preferences {
       ? Math.min(max, Math.max(min, v))
       : fallback;
   return {
+    autosave: value.autosave !== false,
     dark: value.dark === true,
     preview: value.preview === true,
     sidebar: value.sidebar !== false,
     font: ["Serif", "Sans", "Mono"].includes(value.font ?? "")
       ? value.font!
       : "Serif",
+    previewFont: ["Serif", "Sans", "Mono"].includes(value.previewFont ?? "")
+      ? value.previewFont!
+      : ["Serif", "Sans", "Mono"].includes(value.font ?? "")
+        ? value.font!
+        : "Serif",
     size: number(value.size, 15, 11, 22),
     margin: [45, 64, 85].reduce(
       (nearest, candidate) =>

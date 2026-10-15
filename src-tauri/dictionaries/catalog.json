@@ -1,0 +1,108 @@
+{
+  "revision": "67032ee957631908098a72edf48dc81cac27e369",
+  "languages": [
+    {
+      "code": "en_GB",
+      "name": "English (UK)",
+      "stem": "en/en_GB",
+      "licenses": [
+        "en/README_en_GB.txt",
+        "en/license.txt"
+      ]
+    },
+    {
+      "code": "fr_FR",
+      "name": "French",
+      "stem": "fr_FR/dictionaries/fr",
+      "licenses": [
+        "fr_FR/dictionaries/README_dict_fr.txt"
+      ]
+    },
+    {
+      "code": "de_DE",
+      "name": "German",
+      "stem": "de/de_DE_frami",
+      "licenses": [
+        "de/README_de_DE_frami.txt"
+      ]
+    },
+    {
+      "code": "es_ES",
+      "name": "Spanish (Spain)",
+      "stem": "es/es_ES",
+      "licenses": [
+        "es/LICENSE.md",
+        "es/README_hunspell_es.txt"
+      ]
+    },
+    {
+      "code": "it_IT",
+      "name": "Italian",
+      "stem": "it_IT/it_IT",
+      "licenses": [
+        "it_IT/README_it_IT.txt"
+      ]
+    },
+    {
+      "code": "pt_BR",
+      "name": "Portuguese (Brazil)",
+      "stem": "pt_BR/pt_BR",
+      "licenses": [
+        "pt_BR/README_en.txt",
+        "pt_BR/README_pt_BR.txt"
+      ]
+    },
+    {
+      "code": "nl_NL",
+      "name": "Dutch",
+      "stem": "nl_NL/nl_NL",
+      "licenses": [
+        "nl_NL/LICENSE.txt",
+        "nl_NL/README.md"
+      ]
+    },
+    {
+      "code": "ru_RU",
+      "name": "Russian",
+      "stem": "ru_RU/ru_RU",
+      "licenses": [
+        "ru_RU/README_ru_RU.txt"
+      ]
+    },
+    {
+      "code": "uk_UA",
+      "name": "Ukrainian",
+      "stem": "uk_UA/uk_UA",
+      "licenses": [
+        "uk_UA/README_uk_UA.txt"
+      ]
+    },
+    {
+      "code": "pl_PL",
+      "name": "Polish",
+      "stem": "pl_PL/pl_PL",
+      "licenses": [
+        "pl_PL/README_pl_PL.txt",
+        "pl_PL/README_en.txt"
+      ]
+    },
+    {
+      "code": "pt_PT",
+      "name": "Portuguese (Portugal)",
+      "stem": "pt_PT/pt_PT",
+      "licenses": [
+        "pt_PT/LICENSES.txt",
+        "pt_PT/README_pt_PT.txt"
+      ]
+    },
+    {
+      "code": "sv_SE",
+      "name": "Swedish",
+      "stem": "sv_SE/dictionaries/sv_SE",
+      "licenses": [
+        "sv_SE/LICENSE_en_US.txt",
+        "sv_SE/LICENSE_sv_SE.txt"
+      ]
+    }
+  ]
+}
