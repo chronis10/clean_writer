@@ -31,7 +31,6 @@ import {
 import {
   defaults,
   preferences,
-  moveAnchors,
   fileName,
   bookmarkTitle,
   type Document,
@@ -52,7 +51,11 @@ import { findPanel } from "./find-panel";
 import { spellingHover, resetSpelling } from "./spelling";
 import { dictionarySettings } from "./dictionaries";
 import { insertCommands, markdownInsertion } from "./insertions";
-import { sourcePageAt, type SourcePage } from "./source-pages";
+import {
+  sourcePageAt,
+  sourcePagination,
+  type SourcePage,
+} from "./source-pages";
 import { PAGE_HEIGHT, PAGE_WIDTH } from "./pages";
 import { PagedEditor, pageRangesField, pageRangesEffect } from "./paged-editor";
 import "./style.css";
@@ -68,6 +71,7 @@ app.innerHTML = `
 <div id="notice" role="status" hidden></div><main id="canvas" aria-label="Writing canvas"><div id="document-frame"><div id="source-host"></div><div id="preview-host" hidden></div></div></main>
 <div id="document-state" hidden aria-hidden="true"></div><footer class="statusbar"><div><span id="word-count">0 words</span><span class="status-separator">·</span><span id="page-count">1 page</span><span id="search-count" class="search-count sr-only" hidden></span></div><div class="zoom-controls"><button id="zoom-out" aria-label="Zoom out">${icon("minusZoom")}</button><input id="zoom" type="range" min="50" max="200" step="10" aria-label="Page zoom"><button id="zoom-in" aria-label="Zoom in">${icon("plusZoom")}</button><button id="zoom-value" title="Reset zoom to 100%">100%</button></div></footer></div>
 <dialog id="confirm-dialog"><form method="dialog"><h2>Keep your changes?</h2><p id="confirm-message">Save this document before continuing, or discard its unsaved changes.</p><div class="dialog-actions"><button value="cancel">Cancel</button><button value="discard">Discard</button><button value="save" class="primary">Save</button></div></form></dialog>
+<dialog id="delete-page-dialog"><form method="dialog"><h2>Delete page?</h2><p id="delete-page-message"></p><div class="dialog-actions"><button value="cancel" autofocus>Cancel</button><button value="delete" class="primary">Delete</button></div></form></dialog>
 <dialog id="error-dialog"><form method="dialog"><h2>File operation failed</h2><p id="error-message"></p><div class="dialog-actions"><button class="primary">OK</button></div></form></dialog>`;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -203,11 +207,14 @@ function editorState() {
         updateSearchCount();
         if (update.docChanged) {
           const text = update.state.doc.toString();
-          doc.bookmarks = moveAnchors(doc.text, text, doc.bookmarks);
+          doc.bookmarks = doc.bookmarks.map((mark) => ({
+            ...mark,
+            offset: update.changes.mapPos(mark.offset, 1),
+          }));
           doc.text = text;
           saveFailed = false;
           scheduleAutosave();
-          scheduleRender();
+          scheduleRender(true);
           scheduleRecovery();
           updateBookmarks();
           updateStatus();
@@ -397,10 +404,12 @@ function updateStatus() {
   $("dirty-dot").hidden = !dirty();
   for (const id of ["new", "open", "save", "save-as", "export", "insert-image"])
     $<HTMLButtonElement>(id).disabled = busy || !ready;
-  document.title = `Clean Writer - ${fileName(doc.path)}`;
-  if (desktop)
+  const title = `Clean Writer - ${fileName(doc.path)}`;
+  const titleChanged = document.title !== title;
+  if (titleChanged) document.title = title;
+  if (desktop && titleChanged)
     void getCurrentWindow()
-      .setTitle(document.title)
+      .setTitle(title)
       .catch(() => {});
 }
 function updateSettings() {
@@ -861,7 +870,15 @@ function currentPageIndex() {
   const visible = visiblePageIndex();
   return visible >= 0 ? visible : selectedSidebarPageIndex();
 }
+let bookmarkFrame = 0;
 function updateBookmarks() {
+  if (bookmarkFrame) return;
+  bookmarkFrame = requestAnimationFrame(() => {
+    bookmarkFrame = 0;
+    refreshBookmarks();
+  });
+}
+function refreshBookmarks() {
   const index = currentPageIndex();
   const marked = doc.bookmarks.some(
     (mark) => sourcePageAt(sourcePages, mark.offset) === index,
@@ -953,11 +970,25 @@ function addPage() {
   updateThumbnails();
   updateStatus();
 }
-function removePage(key: string) {
+async function removePage(key: string) {
   if (!ready || busy) return;
-  const index = pageEditor.ranges.findIndex((page) => page.key === key);
+  let index = pageEditor.ranges.findIndex((page) => page.key === key);
   if (index < 0) return;
   hidePopovers();
+  const dialog = $<HTMLDialogElement>("delete-page-dialog");
+  if (dialog.open) return;
+  $("delete-page-message").textContent =
+    `Delete page ${index + 1}? You can undo this change.`;
+  dialog.returnValue = "cancel";
+  dialog.showModal();
+  const choice = await new Promise<string>((resolve) =>
+    dialog.addEventListener("close", () => resolve(dialog.returnValue), {
+      once: true,
+    }),
+  );
+  if (choice !== "delete" || !ready || busy) return;
+  index = pageEditor.ranges.findIndex((page) => page.key === key);
+  if (index < 0) return;
   pendingReadingPosition = null;
   pendingPreviewJump = false;
   const nextIndex = pageEditor.removePage(index, !prefs.preview);
@@ -985,12 +1016,19 @@ function removePage(key: string) {
   scheduleRender();
   scheduleRecovery();
 }
-function scheduleRender() {
+function scheduleRender(typing = false) {
+  ++renderGeneration;
+  // Full Markdown rendering and document layout wait until typing stops.
+  // The active editor handles its own overflow without rebuilding preview.
   clearTimeout(renderTimer);
-  const generation = ++renderGeneration;
   renderTimer = setTimeout(
-    () => void render(generation).catch((e) => notice(`Preview failed: ${e}`)),
-    180,
+    () => {
+      renderTimer = undefined;
+      void render(renderGeneration).catch((e) =>
+        notice(`Preview failed: ${e}`),
+      );
+    },
+    typing ? 600 : 0,
   );
 }
 const imageCache = new Map<
@@ -1049,15 +1087,17 @@ async function insertImage() {
   editor.focus();
 }
 async function render(generation: number) {
-  layoutSource();
-  updateThumbnails();
   if (!desktop) {
+    pageEditor.setFlowRanges(sourcePagination(doc.text, prefs).pages);
+    layoutSource();
+    updateThumbnails();
     $("word-count").textContent =
       `${doc.text.trim() ? doc.text.trim().split(/\s+/).length : 0} words`;
     return;
   }
   const documentPath = doc.path;
   const result = await api<Rendered>("render_markdown", { text: doc.text });
+  if (generation !== renderGeneration) return;
   const sections = await resolveImages(
     result.flow ? [result.flow] : result.sections,
     prefs,

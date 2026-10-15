@@ -431,13 +431,26 @@ for (const preview of [false, true]) {
       } else await expectSourcePageBounds(page);
     }
     if (preview) await page.locator("#preview").click();
-    await page.keyboard.insertText("Long inserted content.\n".repeat(150));
+    await page.locator(".source-page .cm-content").last().click();
+    const inserted = "Long inserted content.\n".repeat(150);
+    await page.keyboard.insertText(inserted);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__TEST__.snapshot.session.document.text,
+        ),
+      )
+      .toBe("First page\fSecond page\fThird page\f\f" + inserted);
+    await expect
+      .poll(() => page.locator(".source-page").count())
+      .toBeGreaterThan(5);
     await expectSourcePageBounds(page);
     await expect(
       page.locator(".source-page").nth(2).locator(".cm-content"),
     ).toHaveText("Third page");
+    const count = await page.locator(".source-page").count();
     await page.locator("#preview").click();
-    await expect(page.locator(".preview-page")).toHaveCount(5);
+    await expect(page.locator(".preview-page")).toHaveCount(count);
     await expectPreviewPageBounds(page);
     await expect(
       page.locator(".preview-page").nth(2).locator(".page-body"),
@@ -732,7 +745,7 @@ test("Markdown syntax has readable colours in both appearances without changing 
       const ink = luminance(colour);
       expect(
         (Math.max(paper, ink) + 0.05) / (Math.min(paper, ink) + 0.05),
-      ).toBeGreaterThanOrEqual(4.5);
+      ).toBeGreaterThanOrEqual(dark ? 4.5 : 7);
     }
     await expect(
       page
@@ -2082,6 +2095,8 @@ for (const preview of [false, true]) {
       await page
         .getByRole("button", { name: "Remove page", exact: true })
         .click();
+      await expect(page.locator("#delete-page-dialog")).toBeVisible();
+      await page.getByRole("button", { name: "Delete", exact: true }).click();
       await expect(page.locator(".source-page")).toHaveCount(2);
       const expected = ["First page", "Second page", "Third page"].filter(
         (_, i) => i !== index,
@@ -2122,6 +2137,49 @@ for (const preview of [false, true]) {
   }
 }
 
+for (const preview of [false, true]) {
+  test(`removing a full automatically paginated page requires confirmation in ${preview ? "preview" : "editor"}`, async ({
+    page,
+  }) => {
+    const text = paragraphLines(
+      Array.from(
+        { length: 120 },
+        (_, i) => `Line ${i + 1}: content filling the document.`,
+      ),
+    );
+    await setup(page, text);
+    if (preview) await page.locator("#preview").click();
+    const contents = page.locator(".source-page .cm-content");
+    await expect.poll(() => contents.count()).toBeGreaterThan(1);
+    const count = await contents.count();
+    const pageTexts = () =>
+      contents.evaluateAll((elements) =>
+        elements.map((el) => (el as any).cmTile.root.view.state.doc.toString()),
+      );
+    const before = await pageTexts();
+    const openConfirmation = async () => {
+      await page
+        .getByRole("button", { name: "Go to page 1", exact: true })
+        .click({ button: "right" });
+      await page
+        .getByRole("button", { name: "Remove page", exact: true })
+        .click();
+      await expect(page.locator("#delete-page-dialog")).toBeVisible();
+      await expect(contents).toHaveCount(count);
+      expect(await pageTexts()).toEqual(before);
+    };
+    await openConfirmation();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(contents).toHaveCount(count);
+    await openConfirmation();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(contents).toHaveCount(count - 1);
+    await page.evaluate(() => (window as any).__TEST__.menu("undo"));
+    await expect(contents).toHaveCount(count);
+    await expect.poll(pageTexts).toEqual(before);
+  });
+}
+
 test("removing the only page leaves an editable blank page and Undo restores it", async ({
   page,
 }) => {
@@ -2130,12 +2188,87 @@ test("removing the only page leaves an editable blank page and Undo restores it"
     .getByRole("button", { name: "Go to page 1", exact: true })
     .click({ button: "right" });
   await page.getByRole("button", { name: "Remove page", exact: true }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.locator(".source-page")).toHaveCount(1);
   await expect(page.locator(".source-page .cm-content")).toHaveText("");
   await page.keyboard.press("Control+z");
   await expect(page.locator(".source-page .cm-content")).toHaveText(
     "Only page",
   );
+});
+
+test("sidebar deletion can be cancelled with Cancel or Escape", async ({
+  page,
+}) => {
+  await setup(page, "First\fSecond");
+  for (const cancel of ["button", "escape"]) {
+    await page
+      .getByRole("button", { name: "Go to page 2", exact: true })
+      .click({ button: "right" });
+    await page
+      .getByRole("button", { name: "Remove page", exact: true })
+      .click();
+    const dialog = page.locator("#delete-page-dialog");
+    await expect(dialog).toContainText("Delete page 2?");
+    await expect(page.locator(".source-page")).toHaveCount(2);
+    if (cancel === "button")
+      await dialog.getByRole("button", { name: "Cancel" }).click();
+    else await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(page.locator(".source-page .cm-content").nth(1)).toHaveText(
+      "Second",
+    );
+  }
+});
+
+for (const [text, index, expected] of [
+  ["\fSecond", 0, "Second"],
+  ["First\f\fThird", 1, "First\fThird"],
+  ["First\f", 1, "First"],
+] as const) {
+  test(`Backspace removes empty page ${index + 1} from ${JSON.stringify(text)} and supports Undo`, async ({
+    page,
+  }) => {
+    await setup(page, text);
+    const contents = page.locator(".source-page .cm-content");
+    const count = await contents.count();
+    await contents.nth(index).click();
+    await page.keyboard.press("Backspace");
+    await expect(contents).toHaveCount(count - 1);
+    await expect(page.locator("#delete-page-dialog")).not.toBeVisible();
+    await expect(contents.nth(0)).toBeFocused();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__TEST__.snapshot.session.document.text,
+        ),
+      )
+      .toBe(expected);
+    await page.keyboard.type("!");
+    await expect(contents.nth(0)).toHaveText(
+      index === 0 ? "!Second" : "First!",
+    );
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+z");
+    await expect(contents).toHaveCount(count);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__TEST__.snapshot.session.document.text,
+        ),
+      )
+      .toBe(text);
+  });
+}
+
+test("Backspace keeps the only empty page editable", async ({ page }) => {
+  await setup(page, "");
+  const content = page.locator(".source-page .cm-content");
+  await content.click();
+  await page.keyboard.press("Backspace");
+  await expect(content).toHaveCount(1);
+  await page.keyboard.type("Still here");
+  await expect(content).toHaveText("Still here");
 });
 
 for (const target of ["thumbnail", "text", "blank area"]) {
@@ -2593,6 +2726,139 @@ test("syntax highlighting uses the full Markdown context on continuation pages",
   }
 });
 
+test("typing leaves document layout idle and updates only the active editor", async ({
+  page,
+}) => {
+  await setup(
+    page,
+    paragraphLines(
+      Array.from(
+        { length: 300 },
+        (_, i) => `Line ${i + 1}: content for a longer document.`,
+      ),
+    ),
+  );
+  await expect
+    .poll(() => page.locator(".preview-page").count())
+    .toBeGreaterThan(5);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  // Finish the initial spell-check before counting updates caused by typing.
+  await page.clock.runFor(300);
+  const before = await page
+    .locator(".source-page .cm-content")
+    .evaluateAll((elements) => {
+      const views = elements.map((el) => (el as any).cmTile.root.view);
+      const w = window as any;
+      w.__TEST__.layoutMeasures = 0;
+      w.__TEST__.neighbourUpdates = 0;
+      new MutationObserver((records) => {
+        for (const record of records)
+          for (const node of record.addedNodes)
+            if (node instanceof HTMLElement && node.matches(".source-measure"))
+              w.__TEST__.layoutMeasures++;
+      }).observe(document.body, { childList: true });
+      for (const view of views.slice(1)) {
+        const dispatch = view.dispatch.bind(view);
+        view.dispatch = (...args: any[]) => {
+          // Spell-check replies are independent of typing. Count source and
+          // syntax updates, which must stay local to the edited page.
+          if (
+            args.some(
+              (arg) =>
+                arg.changes ||
+                [arg.effects]
+                  .flat()
+                  .some((effect) => typeof effect?.value?.iter === "function"),
+            )
+          )
+            w.__TEST__.neighbourUpdates++;
+          return dispatch(...args);
+        };
+      }
+      views[0].dispatch({ selection: { anchor: 0 } });
+      views[0].focus();
+      return views.map((view) => view.state.doc.toString());
+    });
+  await page.keyboard.type("xyz");
+  const expected = ["xyz" + before[0], ...before.slice(1)];
+  const pageTexts = () =>
+    page
+      .locator(".source-page .cm-content")
+      .evaluateAll((elements) =>
+        elements.map((el) => (el as any).cmTile.root.view.state.doc.toString()),
+      );
+  expect(await pageTexts()).toEqual(expected);
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.layoutMeasures),
+  ).toBe(0);
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.neighbourUpdates),
+  ).toBe(0);
+  await page.clock.runFor(500);
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.layoutMeasures),
+  ).toBe(0);
+  // Keep typing faster than the idle delay: no document render may run.
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.type("y");
+    await page.clock.runFor(100);
+  }
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.layoutMeasures),
+  ).toBe(0);
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.neighbourUpdates),
+  ).toBe(0);
+  await page.clock.runFor(700);
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.layoutMeasures),
+  ).toBe(1);
+  expect(await pageTexts()).toEqual([
+    "xyzyyyyyy" + before[0],
+    ...before.slice(1),
+  ]);
+  await expect(page.locator(".source-page .cm-content").first()).toBeFocused();
+  await expectSourcePageBounds(page);
+});
+
+test("typing with a visible caret does not scroll to the page edges", async ({
+  page,
+}) => {
+  await setup(
+    page,
+    paragraphLines(
+      Array.from({ length: 150 }, (_, i) => `Line ${i + 1}: document content.`),
+    ),
+  );
+  await expect
+    .poll(() => page.locator(".preview-page").count())
+    .toBeGreaterThan(2);
+  const paper = page.locator(".source-page").nth(2);
+  await paper.locator(".cm-content").evaluate((el) => {
+    const view = (el as any).cmTile.root.view;
+    view.dispatch({ selection: { anchor: view.state.doc.line(15).from } });
+    view.focus();
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  const before = await paper.evaluate((el) => {
+    const canvas = document.querySelector("#canvas")!;
+    canvas.scrollTop +=
+      el.getBoundingClientRect().top - canvas.getBoundingClientRect().top + 140;
+    return canvas.scrollTop;
+  });
+  await page.keyboard.type("xyz");
+  await page.waitForTimeout(400);
+  const after = await page.locator("#canvas").evaluate((el) => el.scrollTop);
+  expect(Math.abs(after - before)).toBeLessThanOrEqual(1);
+  await expect(paper.locator(".cm-content")).toBeFocused();
+});
+
 test("typing onto a new page at low zoom moves the current indicator with the caret", async ({
   page,
 }) => {
@@ -2603,6 +2869,9 @@ test("typing onto a new page at low zoom moves the current indicator with the ca
   await page.keyboard.insertText(
     "A correctly spelled line of content.\n".repeat(42),
   );
+  await expect
+    .poll(() => page.locator(".source-page").count())
+    .toBeGreaterThan(1);
   await expect(page.locator(".source-page .cm-content").last()).toBeFocused();
   const count = await page.locator(".source-page").count();
   await expect(page.locator(".thumbnail").nth(count - 1)).toHaveAttribute(

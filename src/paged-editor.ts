@@ -120,25 +120,30 @@ export function pageRangesField(
       for (const effect of tr.effects)
         if (effect.is(pageRangesEffect)) return effect.value;
       if (!tr.docChanged) return ranges;
-      const text = tr.newDoc.toString();
       const origin = tr.annotation(originPage);
-      let replacement = false;
-      tr.changes.iterChanges((from, to) => {
+      let replacement = false,
+        breaksChanged = false;
+      tr.changes.iterChanges((from, to, _a, _b, inserted) => {
         if (!origin && from === 0 && to === tr.startState.doc.length)
           replacement = true;
+        if (
+          inserted.toString().includes("\f") ||
+          tr.startState.doc.sliceString(from, to).includes("\f")
+        )
+          breaksChanged = true;
       });
-      if (replacement) return initialRanges(text, prefs());
+      if (replacement) return initialRanges(tr.newDoc.toString(), prefs());
       const active =
         origin ??
         ranges[sourcePageAt(ranges, tr.startState.selection.main.head)].key;
-      return splitSections(
-        ranges.map((page) => ({
-          ...page,
-          from: tr.changes.mapPos(page.from, page.key === active ? -1 : 1),
-          to: tr.changes.mapPos(page.to, page.key === active ? 1 : -1),
-        })),
-        text,
-      );
+      const mapped = ranges.map((page) => ({
+        ...page,
+        from: tr.changes.mapPos(page.from, page.key === active ? -1 : 1),
+        to: tr.changes.mapPos(page.to, page.key === active ? 1 : -1),
+      }));
+      return breaksChanged
+        ? splitSections(mapped, tr.newDoc.toString())
+        : mapped;
     },
   });
 }
@@ -176,6 +181,7 @@ interface PageEditor {
   range: PageRange;
   paper: HTMLElement;
   view: EditorView;
+  highlightKey?: string;
 }
 export class PagedEditor {
   readonly master: EditorView;
@@ -185,7 +191,7 @@ export class PagedEditor {
   private wantsScroll = false;
   private wantsFocus = false;
   private activeKey: string | null = null;
-  private flowText: string | null = null;
+  private flowInitialized = false;
   private flowTypography = "";
   private highlightText = "";
   private highlights: { from: number; to: number; classes: string }[] = [];
@@ -211,6 +217,23 @@ export class PagedEditor {
           this.activeKey = null;
         this.wantsScroll ||= transactions.some((tr) => tr.scrollIntoView);
         view.update(transactions);
+        const ranges = this.ranges;
+        if (
+          transactions.every(
+            (tr) => tr.annotation(originPage) && !tr.effects.length,
+          ) &&
+          ranges.length === this.entries.length &&
+          ranges.every((range, i) => range.key === this.entries[i].range.key)
+        ) {
+          // The visible editor already applied this edit. Only its absolute
+          // offsets changed; don't reparse or visit every page's document.
+          this.entries.forEach((entry, i) => {
+            entry.range = ranges[i];
+          });
+          this.wantsFocus = this.wantsScroll = false;
+          if (transactions.some((tr) => tr.docChanged)) this.checkOverflow();
+          return;
+        }
         this.scheduleSync();
       },
     });
@@ -234,7 +257,7 @@ export class PagedEditor {
     for (const entry of this.entries) entry.view.destroy();
     this.entries = [];
     this.host.replaceChildren();
-    this.flowText = null;
+    this.flowInitialized = false;
     this.activeKey = null;
     this.master.setState(state);
     this.sync();
@@ -245,6 +268,40 @@ export class PagedEditor {
     queueMicrotask(() => {
       this.pending = false;
       this.sync();
+    });
+  }
+  private checkOverflow() {
+    const entry = this.entries[this.activeIndex];
+    if (!entry) return;
+    entry.view.requestMeasure({
+      key: entry,
+      read: () =>
+        entry.view.contentHeight > entry.view.scrollDOM.clientHeight + 1,
+      write: (overflow) => {
+        if (!overflow || !this.entries.includes(entry)) return;
+        const text = entry.view.state.doc.toString();
+        const local = sourcePagination(text, this.preferences()).pages;
+        if (local.length < 2) return;
+        const index = this.entries.indexOf(entry);
+        const ranges = [...this.ranges];
+        ranges.splice(
+          index,
+          1,
+          ...local.map((page, i) => ({
+            ...page,
+            from: entry.range.from + page.from,
+            to: entry.range.from + page.to,
+            section: entry.range.section,
+            key: i === 0 ? entry.range.key : pageKey(),
+          })),
+        );
+        this.master.dispatch({
+          effects: pageRangesEffect.of(ranges),
+          annotations: Transaction.addToHistory.of(false),
+          scrollIntoView: true,
+        });
+        this.focus();
+      },
     });
   }
   private pageUpdate(entry: PageEditor, update: ViewUpdate) {
@@ -393,6 +450,10 @@ export class PagedEditor {
     const index = this.entries.indexOf(entry),
       head = selection.head;
     const length = entry.view.state.doc.length;
+    if (key === "Backspace" && length === 0 && this.ranges.length > 1) {
+      this.removePage(index, true, true);
+      return true;
+    }
     const first = head === 0,
       last = head === length;
     const position = entry.view.coordsAtPos(head);
@@ -478,12 +539,16 @@ export class PagedEditor {
         prefs.size,
         prefs.margin,
       ]);
-      if (text !== this.flowText || typography !== this.flowTypography) {
-        this.flowText = text;
+      // Keep mapped page boundaries while typing. The render pass computes a
+      // single layout that fits source and preview; measuring source here too
+      // would alternate two different layouts on every edit.
+      if (!this.flowInitialized || typography !== this.flowTypography) {
+        this.flowInitialized = true;
         this.flowTypography = typography;
         this.setFlowRanges(sourcePagination(text, prefs).pages);
       }
-      if (text !== this.highlightText) {
+      const highlightsChanged = text !== this.highlightText;
+      if (highlightsChanged) {
         this.highlightText = text;
         this.highlights = [];
         const contextual = text.replace(
@@ -500,39 +565,60 @@ export class PagedEditor {
       const next = this.ranges.map((range, index) => {
         const entry = old.get(range.key) ?? this.create(range);
         old.delete(range.key);
+        const rangeChanged =
+          entry.range.from !== range.from || entry.range.to !== range.to;
         entry.range = range;
-        entry.paper.dataset.pageIndex = String(index);
-        entry.paper.setAttribute("aria-label", `Source page ${index + 1}`);
-        entry.paper.querySelector(".page-number")!.textContent = String(
-          index + 1,
-        );
+        if (entry.paper.dataset.pageIndex !== String(index)) {
+          entry.paper.dataset.pageIndex = String(index);
+          entry.paper.setAttribute("aria-label", `Source page ${index + 1}`);
+          entry.paper.querySelector(".page-number")!.textContent = String(
+            index + 1,
+          );
+        }
         const text = this.master.state.doc.sliceString(range.from, range.to);
-        if (text !== entry.view.state.doc.toString())
+        if (text !== entry.view.state.doc.toString()) {
+          entry.highlightKey = undefined;
           entry.view.dispatch({
             changes: { from: 0, to: entry.view.state.doc.length, insert: text },
             annotations: pageSync.of(true),
           });
-        entry.view.dispatch({
-          effects: highlightEffect.of(
-            Decoration.set(
-              this.highlights
-                .filter(
-                  (mark) =>
-                    range.to > range.from &&
-                    mark.to > range.from &&
-                    mark.from < range.to,
-                )
-                .map((mark) =>
-                  Decoration.mark({ class: mark.classes }).range(
-                    Math.max(0, mark.from - range.from),
-                    Math.min(range.to, mark.to) - range.from,
+        }
+        if (
+          highlightsChanged ||
+          rangeChanged ||
+          entry.highlightKey === undefined
+        ) {
+          const marks = this.highlights
+            .filter(
+              (mark) =>
+                range.to > range.from &&
+                mark.to > range.from &&
+                mark.from < range.to,
+            )
+            .map((mark) => ({
+              from: Math.max(0, mark.from - range.from),
+              to: Math.min(range.to, mark.to) - range.from,
+              classes: mark.classes,
+            }));
+          const highlightKey = JSON.stringify(marks);
+          if (highlightKey !== entry.highlightKey) {
+            entry.highlightKey = highlightKey;
+            entry.view.dispatch({
+              effects: highlightEffect.of(
+                Decoration.set(
+                  marks.map((mark) =>
+                    Decoration.mark({ class: mark.classes }).range(
+                      mark.from,
+                      mark.to,
+                    ),
                   ),
+                  true,
                 ),
-              true,
-            ),
-          ),
-          annotations: pageSync.of(true),
-        });
+              ),
+              annotations: pageSync.of(true),
+            });
+          }
+        }
         const query = getSearchQuery(this.master.state);
         if (!getSearchQuery(entry.view.state).eq(query))
           entry.view.dispatch({
@@ -570,7 +656,6 @@ export class PagedEditor {
             scrollIntoView: this.wantsScroll,
             annotations: pageSync.of(true),
           });
-        if (this.wantsScroll) active.paper.scrollIntoView({ block: "nearest" });
         if (this.wantsFocus && !active.view.hasFocus) active.view.focus();
       }
       this.wantsScroll = this.wantsFocus = false;
@@ -611,17 +696,20 @@ export class PagedEditor {
     this.focus();
     return true;
   }
-  removePage(index: number, focus = true) {
+  removePage(index: number, focus = true, backward = false) {
     const plan = planPageRemoval(
       this.ranges,
       this.master.state.doc.toString(),
       index,
     );
+    if (backward) plan.index = Math.max(0, index - 1);
+    const target = plan.ranges[plan.index];
+    this.activeKey = target.key;
     this.master.dispatch({
       changes: { from: plan.from, to: plan.to },
-      selection: { anchor: plan.ranges[plan.index].from },
+      selection: { anchor: backward && index > 0 ? target.to : target.from },
       effects: pageRangesEffect.of(plan.ranges),
-      annotations: isolateHistory.of("full"),
+      annotations: [isolateHistory.of("full"), originPage.of(target.key)],
       scrollIntoView: focus,
     });
     if (focus) this.focus();
