@@ -38,15 +38,21 @@ function cut(text: string, at: number) {
 
 // Parse Markdown once before splitting. Cloning its semantic DOM retains code
 // fences, links, emphasis, lists and tables on every continuation page.
-function sectionDOM(html: string, text: string, base: number) {
+function sectionDOM(
+  html: string,
+  text: string,
+  base: number,
+  blocks?: ReturnType<typeof markdownBlocks>,
+) {
   const root = document.createElement("div");
   root.append(sanitizedContent(html));
-  const source = markdownBlocks(text).filter((block) =>
-    text.slice(block.from, block.to).trim(),
-  );
+  let source: ReturnType<typeof markdownBlocks> | undefined;
   for (const [index, element] of [...root.children].entries()) {
     const block = element as HTMLElement;
     if (!block.classList.contains("source-block")) {
+      source ??= (blocks ?? markdownBlocks(text)).filter((block) =>
+        text.slice(block.from, block.to).trim(),
+      );
       block.classList.add("source-block");
       block.dataset.sourceFrom ??= String(base + (source[index]?.from ?? 0));
       block.dataset.sourceTo = String(
@@ -179,31 +185,112 @@ export function pageFragment(root: HTMLElement, from: number, to: number) {
   return result.innerHTML;
 }
 
-export function flowingPages(
+export interface FlowLayout {
+  text: string;
+  typography: string;
+  pages: SourcePage[];
+  html: string[];
+}
+
+function layoutContent(html: string) {
+  // Source coordinates move after an earlier edit, but do not affect geometry.
+  return html.replace(/ data-source-(?:from|to)="[^"]*"/g, "");
+}
+
+function reusablePages(
+  previous: FlowLayout | undefined,
+  text: string,
+  typography: string,
+) {
+  const pages = new Map<number, { to: number; html: string }>();
+  if (!previous || previous.typography !== typography) return pages;
+  const old = previous.text;
+  let prefix = 0,
+    suffix = 0;
+  while (
+    prefix < Math.min(old.length, text.length) &&
+    old[prefix] === text[prefix]
+  )
+    prefix++;
+  while (
+    suffix < Math.min(old.length, text.length) - prefix &&
+    old[old.length - suffix - 1] === text[text.length - suffix - 1]
+  )
+    suffix++;
+  previous.pages.forEach((page, index) => {
+    const shift =
+      page.to < prefix || old === text
+        ? 0
+        : page.from >= old.length - suffix
+          ? text.length - old.length
+          : null;
+    if (shift !== null)
+      pages.set(page.from + shift, {
+        to: page.to + shift,
+        html: previous.html[index],
+      });
+  });
+  return pages;
+}
+
+export async function flowingPages(
   text: string,
   sections: string[],
   prefs: Preferences,
   host: HTMLElement,
   continuous = false,
+  pause: () => Promise<boolean> = async () => true,
+  previous?: FlowLayout,
 ) {
+  const typography = JSON.stringify([
+    prefs.font,
+    prefs.previewFont,
+    prefs.size,
+    prefs.margin,
+  ]);
+  const reusable = reusablePages(previous, text, typography);
   const continuousRoot = continuous ? sectionDOM(sections[0], text, 0) : null;
   const measure = sourceMeasurer(prefs);
   const paper = previewContainers([""], prefs, host)[0].element;
+  // Measurement pages are not committed document pages while layout yields.
+  paper.classList.remove("preview-page");
   const body = paper.querySelector<HTMLElement>(".page-body")!;
   const pages: SourcePage[] = [],
     html: string[] = [];
   let base = 0;
   try {
-    text.split("\f").forEach((section, index) => {
+    if (!(await pause())) return null;
+    for (const [index, section] of text.split("\f").entries()) {
       const end = base + section.length;
+      const sourceBlocks = markdownBlocks(section);
+      if (!(await pause())) return null;
       const root =
-        continuousRoot ?? sectionDOM(sections[index] ?? "", section, base);
-      const blocks = markdownBlocks(section).map((b) => ({
+        continuousRoot ??
+        sectionDOM(sections[index] ?? "", section, base, sourceBlocks);
+      const blocks = sourceBlocks.map((b) => ({
         from: b.from + base,
         to: b.to + base,
       }));
+      if (!(await pause())) return null;
       let from = base;
       do {
+        const cached = reusable.get(from);
+        if (
+          cached &&
+          (cached.to > from || from === end) &&
+          cached.to <= end &&
+          blockBoundary(blocks, from, cached.to) === cached.to &&
+          wordBoundary(text, from, cached.to) === cached.to
+        ) {
+          const fragment = pageFragment(root, from, cached.to);
+          if (layoutContent(fragment) === layoutContent(cached.html)) {
+            pages.push({ from, to: cached.to, section: index });
+            html.push(fragment);
+            from = cached.to;
+            if (!(await pause())) return null;
+            continue;
+          }
+        }
         let to = fitSourceEnd(text, from, end, measure.fits);
         to = blockBoundary(blocks, from, to);
         const fits = (candidate: number) => {
@@ -228,14 +315,15 @@ export function flowingPages(
         pages.push({ from, to, section: index });
         html.push(pageFragment(root, from, to));
         from = to;
+        if (!(await pause())) return null;
       } while (from < end);
       base = end + 1;
-    });
+    }
   } finally {
     measure.remove();
     paper.remove();
   }
-  return { pages, html };
+  return { text, typography, pages, html };
 }
 
 // Keep explicit page breaks in exports while retaining Markdown context across

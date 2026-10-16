@@ -1,4 +1,8 @@
-import { flowingPages, manualPreviewSections } from "./page-flow";
+import {
+  flowingPages,
+  manualPreviewSections,
+  type FlowLayout,
+} from "./page-flow";
 import { markdownBlocks } from "./markdown-blocks";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -18,7 +22,6 @@ import {
   undo,
   redo,
 } from "@codemirror/commands";
-import { markdown } from "@codemirror/lang-markdown";
 import { markdownHighlighting } from "./syntax-theme";
 import {
   search,
@@ -83,11 +86,13 @@ let busy = false,
   ready = false,
   exporting = false,
   recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let cursorRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let renderTimer: ReturnType<typeof setTimeout> | undefined,
   renderGeneration = 0,
   pages: Page[] = [],
   currentPreviewPage = 0,
   requestedOpen = false;
+let flowLayout: FlowLayout | undefined;
 let sourcePages: SourcePage[] = [{ from: 0, to: 0, section: 0 }];
 let selectedSidebarPageKey: string | null = null;
 let pendingPreviewJump = false;
@@ -187,7 +192,6 @@ function editorState() {
     selection: { anchor: doc.cursor },
     extensions: [
       history(),
-      markdown(),
       rangesField,
       invertedEffects.of((tr) =>
         tr.docChanged
@@ -202,9 +206,17 @@ function editorState() {
       ]),
       EditorView.updateListener.of((update) => {
         if (!ready) return;
-        sourcePages = update.state.field(rangesField);
-        doc.pageStarts = sourcePages.map((page) => page.from);
-        updateSearchCount();
+        const ranges = update.state.field(rangesField);
+        if (ranges !== sourcePages) {
+          sourcePages = ranges;
+          doc.pageStarts = ranges.map((page) => page.from);
+        }
+        if (
+          update.docChanged ||
+          !getSearchQuery(update.state).eq(getSearchQuery(update.startState)) ||
+          searchPanelOpen(update.state) !== searchPanelOpen(update.startState)
+        )
+          updateSearchCount();
         if (update.docChanged) {
           const text = update.state.doc.toString();
           doc.bookmarks = doc.bookmarks.map((mark) => ({
@@ -229,12 +241,17 @@ function editorState() {
             (update.selectionSet ||
               (reflowed && pageEditor.views.some((view) => view.hasFocus)))
           ) {
-            readingPageKey =
-              pageEditor.ranges[pageEditor.activeIndex]?.key ?? null;
-            followVisiblePage(true);
+            const key = pageEditor.ranges[pageEditor.activeIndex]?.key ?? null;
+            if (key !== readingPageKey) {
+              readingPageKey = key;
+              followVisiblePage(true);
+              updateBookmarks();
+            }
           }
-          updateBookmarks();
-          scheduleRecovery();
+          if (reflowed) {
+            updateBookmarks();
+            scheduleRecovery();
+          } else if (!update.docChanged) scheduleCursorRecovery();
         }
       }),
     ],
@@ -330,17 +347,33 @@ async function checkpoint() {
     throw error;
   }
 }
-function scheduleRecovery() {
+function cancelRecovery() {
   clearTimeout(recoveryTimer);
-  recoveryTimer = setTimeout(
-    () =>
-      void serial(checkpoint).catch((e) => {
-        recoveryFailed = true;
-        notice(`Recovery could not be stored: ${e}`, true);
-        updateStatus();
-      }),
-    200,
-  );
+  clearTimeout(cursorRecoveryTimer);
+  recoveryTimer = cursorRecoveryTimer = undefined;
+}
+function writeRecovery() {
+  void serial(checkpoint).catch((e) => {
+    recoveryFailed = true;
+    notice(`Recovery could not be stored: ${e}`, true);
+    updateStatus();
+  });
+}
+function scheduleRecovery() {
+  cancelRecovery();
+  recoveryTimer = setTimeout(() => {
+    recoveryTimer = undefined;
+    writeRecovery();
+  }, 200);
+}
+function scheduleCursorRecovery() {
+  // Text recovery takes priority. Moving the caret must never postpone it.
+  if (recoveryTimer) return;
+  clearTimeout(cursorRecoveryTimer);
+  cursorRecoveryTimer = setTimeout(() => {
+    cursorRecoveryTimer = undefined;
+    writeRecovery();
+  }, 1000);
 }
 function scheduleAutosave() {
   clearTimeout(autosaveTimer);
@@ -385,21 +418,23 @@ function updateStatus() {
       });
   }
   $("filename").textContent = fileName(doc.path);
-  $("save-state").textContent = busy
-    ? "Working…"
-    : autosaving
-      ? "Saving…"
-      : recoveryFailed
-        ? "Recovery unavailable"
-        : saveFailed
-          ? "Save failed"
-          : dirty()
-            ? doc.path
-              ? "Unsaved changes"
-              : "Recovered locally"
-            : doc.path
-              ? "Saved"
-              : "Local draft";
+  $("save-state").textContent = !ready
+    ? "Loading…"
+    : busy
+      ? "Working…"
+      : autosaving
+        ? "Saving…"
+        : recoveryFailed
+          ? "Recovery unavailable"
+          : saveFailed
+            ? "Save failed"
+            : dirty()
+              ? doc.path
+                ? "Unsaved changes"
+                : "Recovered locally"
+              : doc.path
+                ? "Saved"
+                : "Local draft";
   $("save-state").classList.toggle("unsaved", dirty());
   $("dirty-dot").hidden = !dirty();
   for (const id of ["new", "open", "save", "save-as", "export", "insert-image"])
@@ -467,20 +502,33 @@ documentSizeObserver.observe($("preview-host"));
 function visiblePageIndex() {
   const canvas = $("canvas").getBoundingClientRect();
   const host = $(prefs.preview ? "preview-host" : "source-host");
-  let fallback = -1;
-  const readingTop = canvas.top + Math.min(80, canvas.height / 3);
-  for (const paper of host.children as HTMLCollectionOf<HTMLElement>) {
-    const rect = paper.getBoundingClientRect();
-    if (rect.bottom <= canvas.top || rect.top >= canvas.bottom) continue;
-    const index = prefs.preview
-      ? pageEditor.ranges.findIndex((p) => p.key === paper.dataset.pageKey)
-      : Number(paper.dataset.pageIndex);
-    if (index < 0) continue;
-    const key = pageEditor.ranges[index]?.key;
-    if (key === readingPageKey) return index;
-    if (fallback < 0 && rect.bottom > readingTop) fallback = index;
+  const papers = host.children as HTMLCollectionOf<HTMLElement>;
+  const preferred = pageEditor.ranges.findIndex(
+    (p) => p.key === readingPageKey,
+  );
+  const selected = papers[preferred];
+  if (selected?.dataset.pageKey === readingPageKey) {
+    const rect = selected.getBoundingClientRect();
+    if (rect.bottom > canvas.top && rect.top < canvas.bottom) return preferred;
   }
-  return fallback;
+  // Pages are vertically ordered. Locate the reading line without measuring
+  // every offscreen page on each keystroke or scroll frame.
+  const readingTop = canvas.top + Math.min(80, canvas.height / 3);
+  let low = 0,
+    high = papers.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (papers[middle].getBoundingClientRect().bottom <= readingTop)
+      low = middle + 1;
+    else high = middle;
+  }
+  const paper = papers[low];
+  if (!paper) return -1;
+  const rect = paper.getBoundingClientRect();
+  if (rect.bottom <= canvas.top || rect.top >= canvas.bottom) return -1;
+  return prefs.preview
+    ? pageEditor.ranges.findIndex((p) => p.key === paper.dataset.pageKey)
+    : Number(paper.dataset.pageIndex);
 }
 function followVisiblePage(force = false) {
   forceSidebarFollow ||= force;
@@ -736,9 +784,10 @@ function changeSettings(change: Partial<Preferences>, render = true) {
   if (change.autosave !== undefined) scheduleAutosave();
   if (render) scheduleRender();
 }
-function applySnapshot(snapshot: Snapshot, replaceText = true) {
+async function applySnapshot(snapshot: Snapshot, replaceText = true) {
   if (replaceText) {
     ready = false;
+    flowLayout = undefined;
     selectedSidebarPageKey = null;
     lastFollowedPageKey = null;
     pendingReadingPosition = null;
@@ -751,7 +800,6 @@ function applySnapshot(snapshot: Snapshot, replaceText = true) {
       offset: Math.min(doc.text.length, Math.max(0, b.offset)),
     }));
     // Reset the page editors after loading this document's typography below.
-    ready = true;
   } else {
     doc.path = snapshot.session.document.path;
   }
@@ -769,7 +817,19 @@ function applySnapshot(snapshot: Snapshot, replaceText = true) {
   updateRecent();
   updateBookmarks();
   updateStatus();
-  scheduleRender();
+  if (replaceText) {
+    // Enable editing only after the initial page boundaries are committed.
+    // Later edits use cancellable background layout while typing stays enabled.
+    clearTimeout(renderTimer);
+    try {
+      await render(++renderGeneration);
+    } catch (e) {
+      // A preview failure must not prevent editing or saving the source.
+      notice(`Preview failed: ${e}`);
+    }
+    ready = true;
+    updateStatus();
+  } else scheduleRender();
   scheduleAutosave();
 }
 function resetEditor() {
@@ -779,13 +839,13 @@ function resetEditor() {
 
 async function save(saveAs = false): Promise<boolean> {
   clearTimeout(autosaveTimer);
-  clearTimeout(recoveryTimer);
+  cancelRecovery();
   try {
     await checkpoint();
     const snapshot = await api<Snapshot | null>("save_document", { saveAs });
     if (!snapshot) return false;
     // Keep editor history when a save changes the destination.
-    applySnapshot(snapshot, false);
+    await applySnapshot(snapshot, false);
     if (dirty()) scheduleRecovery();
     return true;
   } catch (e) {
@@ -819,10 +879,10 @@ async function replaceDocument(
   args: Record<string, unknown> = {},
 ) {
   if (!(await confirmReplacement())) return;
-  clearTimeout(recoveryTimer);
+  cancelRecovery();
   const snapshot = await api<Snapshot | null>(command, args);
   if (snapshot) {
-    applySnapshot(snapshot);
+    await applySnapshot(snapshot);
     editor.focus();
   }
 }
@@ -1096,11 +1156,21 @@ async function render(generation: number) {
     return;
   }
   const documentPath = doc.path;
-  const result = await api<Rendered>("render_markdown", { text: doc.text });
+  const text = doc.text;
+  const renderPreferences = { ...prefs };
+  let lastYield = performance.now();
+  const pause = async () => {
+    if (performance.now() - lastYield >= 8) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      lastYield = performance.now();
+    }
+    return generation === renderGeneration;
+  };
+  const result = await api<Rendered>("render_markdown", { text });
   if (generation !== renderGeneration) return;
   const sections = await resolveImages(
     result.flow ? [result.flow] : result.sections,
-    prefs,
+    renderPreferences,
     imageLoader(documentPath),
   );
   if (generation !== renderGeneration) return;
@@ -1110,19 +1180,48 @@ async function render(generation: number) {
   let next: Page[];
   let sourceKeys: string[];
   try {
-    const flow = flowingPages(doc.text, sections, prefs, host, !!result.flow);
+    const flow = await flowingPages(
+      text,
+      sections,
+      renderPreferences,
+      host,
+      !!result.flow,
+      pause,
+      flowLayout,
+    );
+    if (!flow || generation !== renderGeneration) return;
+    if (!prefs.preview && flowLayout) {
+      // Keep source pagination current without rebuilding an invisible preview.
+      // Switching to preview schedules a render of the latest document.
+      pageEditor.setFlowRanges(flow.pages);
+      layoutSource();
+      flowLayout = flow;
+      $("word-count").textContent =
+        `${result.words.toLocaleString()} ${result.words === 1 ? "word" : "words"}`;
+      updateThumbnails();
+      return;
+    }
+    next = [];
+    for (let index = 0; index < flow.html.length; index += 4) {
+      const batch = previewContainers(
+        flow.html.slice(index, index + 4),
+        renderPreferences,
+        host,
+        index,
+      );
+      for (const page of batch) page.element.classList.remove("preview-page");
+      next.push(...batch);
+      if (!(await pause())) return;
+    }
+    // Commit page boundaries only when the entire current layout is ready.
     pageEditor.setFlowRanges(flow.pages);
     layoutSource();
     sourceKeys = pageEditor.ranges.map((page) => page.key);
-    next = previewContainers(flow.html, prefs, host);
-  } catch (e) {
+    flowLayout = flow;
+  } finally {
     host.remove();
-    throw e;
   }
-  if (generation !== renderGeneration) {
-    host.remove();
-    return;
-  }
+  if (generation !== renderGeneration) return;
   const previewHost = $("preview-host");
   const existing = new Map(
     [...previewHost.children].map((element) => [
@@ -1131,6 +1230,7 @@ async function render(generation: number) {
     ]),
   );
   next = next.map((page, index) => {
+    page.element.classList.add("preview-page");
     const key = sourceKeys[index];
     const previous = existing.get(key);
     page.element.dataset.pageKey = key;
@@ -1160,7 +1260,6 @@ async function render(generation: number) {
     if (current !== page.element)
       previewHost.insertBefore(page.element, current ?? null);
   });
-  host.remove();
   pages = next;
   lastRenderedGeneration = generation;
   if (prefs.preview && pendingReadingPosition) {
@@ -1337,7 +1436,7 @@ function hidePopovers() {
 }
 async function closeApp() {
   clearTimeout(autosaveTimer);
-  clearTimeout(recoveryTimer);
+  cancelRecovery();
   let closed = false;
   try {
     if (dirty()) {
@@ -1354,7 +1453,7 @@ async function closeApp() {
       if (choice === "save") {
         if (!(await save(false))) return;
       } else if (choice === "discard") {
-        applySnapshot(await api<Snapshot>("discard_changes"));
+        await applySnapshot(await api<Snapshot>("discard_changes"));
       } else return;
     } else await checkpoint();
     await getCurrentWindow().destroy();
@@ -1648,7 +1747,7 @@ async function start() {
         savedText: null,
       };
     }
-    applySnapshot(snapshot);
+    await applySnapshot(snapshot);
     ready = true;
     updateStatus();
     if (!desktop)

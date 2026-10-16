@@ -6,6 +6,7 @@ import {
   StateField,
   Transaction,
   type Extension,
+  type StateCommand,
 } from "@codemirror/state";
 import {
   EditorView,
@@ -19,9 +20,17 @@ import {
   isolateHistory,
   undo,
   redo,
+  deleteCharBackward,
+  deleteCharForward,
 } from "@codemirror/commands";
 import { getSearchQuery, search, setSearchQuery } from "@codemirror/search";
-import { markdownLanguage, markdownKeymap } from "@codemirror/lang-markdown";
+import {
+  markdown,
+  markdownLanguage,
+  insertNewlineContinueMarkup,
+  deleteMarkupBackward,
+} from "@codemirror/lang-markdown";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { highlightTree } from "@lezer/highlight";
 import { markdownStyle } from "./syntax-theme";
 import type { Preferences } from "./model";
@@ -220,6 +229,15 @@ export class PagedEditor {
         const ranges = this.ranges;
         if (
           transactions.every(
+            (tr) =>
+              tr.annotation(originPage) && !tr.docChanged && !tr.effects.length,
+          )
+        ) {
+          this.wantsFocus = this.wantsScroll = false;
+          return;
+        }
+        if (
+          transactions.every(
             (tr) => tr.annotation(originPage) && !tr.effects.length,
           ) &&
           ranges.length === this.entries.length &&
@@ -365,10 +383,14 @@ export class PagedEditor {
           highlightField,
           search(),
           keymap.of([
-            ...markdownKeymap.map((binding) => ({
-              ...binding,
-              run: () => binding.run?.(this.master) ?? false,
-            })),
+            {
+              key: "Enter",
+              run: () => this.markdownCommand(insertNewlineContinueMarkup),
+            },
+            {
+              key: "Backspace",
+              run: () => this.markdownCommand(deleteMarkupBackward, true),
+            },
             ...[
               "ArrowLeft",
               "ArrowRight",
@@ -444,21 +466,68 @@ export class PagedEditor {
     });
     return entry;
   }
+  private markdownCommand(command: StateCommand, deleting = false) {
+    const { doc, selection } = this.master.state;
+    if (deleting) {
+      if (!selection.main.empty) return false;
+      const line = doc.lineAt(selection.main.head);
+      const prefix = doc.sliceString(line.from, selection.main.head);
+      // Markdown Backspace only changes list/quote prefixes or indentation.
+      // Ordinary text deletion must not create a document-wide syntax tree.
+      if (!prefix || !/^(?:\s|>|[-+*](?=\s)|\d+[.)](?=\s))*$/.test(prefix))
+        return false;
+    }
+    // Keep the persistent document/history free of an eager language parser.
+    // Commands that need Markdown context parse a temporary state on demand.
+    const state = EditorState.create({
+      doc,
+      selection,
+      extensions: [markdown({ addKeymap: false })],
+    });
+    ensureSyntaxTree(state, selection.main.head, 100);
+    return command({
+      state,
+      dispatch: (transaction) =>
+        this.master.dispatch({
+          changes: transaction.changes,
+          selection: transaction.selection,
+          scrollIntoView: transaction.scrollIntoView,
+          userEvent: transaction.annotation(Transaction.userEvent),
+        }),
+    });
+  }
   private crossPage(entry: PageEditor, key: string) {
     const selection = entry.view.state.selection.main;
     if (!selection.empty) return false;
-    const index = this.entries.indexOf(entry),
-      head = selection.head;
+    const head = selection.head;
     const length = entry.view.state.doc.length;
-    if (key === "Backspace" && length === 0 && this.ranges.length > 1) {
-      this.removePage(index, true, true);
-      return true;
-    }
     const first = head === 0,
       last = head === length;
-    const position = entry.view.coordsAtPos(head);
-    const atTop = position?.top === entry.view.coordsAtPos(0)?.top;
-    const atBottom = position?.top === entry.view.coordsAtPos(length)?.top;
+    if (key === "Backspace" && length === 0 && this.ranges.length > 1) {
+      this.removePage(this.entries.indexOf(entry), true, true);
+      return true;
+    }
+    let atTop = false,
+      atBottom = false;
+    if (key === "ArrowUp" || key === "ArrowDown") {
+      const line = entry.view.state.doc.lineAt(head);
+      // Only a visual row on the first/last logical line can cross a page.
+      // Let CodeMirror move within the page without duplicate geometry reads.
+      if (key === "ArrowUp" ? line.from !== 0 : line.to !== length)
+        return false;
+      const position = entry.view.coordsAtPos(head);
+      const edge = entry.view.coordsAtPos(key === "ArrowUp" ? 0 : length);
+      atTop =
+        key === "ArrowUp" && !!position && !!edge && position.top === edge.top;
+      atBottom =
+        key === "ArrowDown" &&
+        !!position &&
+        !!edge &&
+        position.top === edge.top;
+    } else if (key === "ArrowLeft" || key === "Backspace") {
+      if (!first) return false;
+    } else if (!last) return false;
+    const index = this.entries.indexOf(entry);
     const backward =
       ((key === "ArrowLeft" || key === "Backspace") && first) ||
       (key === "ArrowUp" && atTop);
@@ -473,13 +542,31 @@ export class PagedEditor {
     if (!target) return false;
     const absolute = entry.range.from + head;
     if (key === "Backspace" || key === "Delete") {
+      const adjacent =
+        key === "Backspace" ? target.range.to : target.range.from;
+      if (adjacent === absolute) {
+        // Automatic page boundaries contain no character to delete. Edit the
+        // neighbouring page directly and keep its normal, local typing path.
+        target.view.dispatch({
+          selection: {
+            anchor: key === "Backspace" ? target.view.state.doc.length : 0,
+          },
+        });
+        const deleted = (
+          key === "Backspace" ? deleteCharBackward : deleteCharForward
+        )(target.view);
+        if (deleted) target.view.focus();
+        return deleted;
+      }
       const from = key === "Backspace" ? absolute - 1 : absolute;
       const to = from + 1;
+      this.activeKey = target.range.key;
       this.master.dispatch({
         changes: { from, to },
         selection: { anchor: from },
         scrollIntoView: true,
         userEvent: "delete",
+        annotations: originPage.of(target.range.key),
       });
     } else {
       let offset = backward
@@ -492,12 +579,13 @@ export class PagedEditor {
           : target.view.state.doc.line(1);
         offset = target.range.from + Math.min(line.to, line.from + column);
       }
-      this.activeKey = target.range.key;
-      this.master.dispatch({
-        selection: { anchor: offset },
-        annotations: originPage.of(target.range.key),
+      target.view.dispatch({
+        selection: { anchor: offset - target.range.from },
         scrollIntoView: true,
+        userEvent: "select",
       });
+      target.view.focus();
+      return true;
     }
     this.focus();
     return true;

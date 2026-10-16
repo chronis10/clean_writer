@@ -59,9 +59,11 @@ export function previewContainers(
   sections: string[],
   prefs: Preferences,
   host: HTMLElement,
+  startIndex = 0,
 ): Page[] {
   stylePaper(host, prefs);
-  return sections.map((html, index) => {
+  return sections.map((html, offset) => {
+    const index = startIndex + offset;
     const paper = document.createElement("article");
     paper.className = "paper preview-paper preview-page";
     paper.dataset.sourcePageIndex = String(index);

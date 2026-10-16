@@ -1321,9 +1321,13 @@ for (const preview of [false, true]) {
     await page.locator("#settings").click();
     await page.locator("#font").selectOption("Mono");
     await page.waitForTimeout(300);
+    // Fractional thumbnail heights can round scroll anchoring by one CSS pixel
+    // after typography reflows. Larger movement still indicates a scroll reset.
     expect(
-      await page.locator("#thumbnails").evaluate((el) => el.scrollTop),
-    ).toBe(sidebarScroll);
+      await page
+        .locator("#thumbnails")
+        .evaluate((el, top) => Math.abs(el.scrollTop - top), sidebarScroll),
+    ).toBeLessThanOrEqual(1);
     await page.locator("#settings").click();
     // Clicking the document follows its visible page without internal scrolling.
     await paper.first().click({ position: { x: 80, y: 100 } });
@@ -2741,8 +2745,9 @@ test("typing leaves document layout idle and updates only the active editor", as
   await expect
     .poll(() => page.locator(".preview-page").count())
     .toBeGreaterThan(5);
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  const clockStart = new Date("2026-01-01T00:00:00Z");
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
   // Finish the initial spell-check before counting updates caused by typing.
   await page.clock.runFor(300);
   const before = await page
@@ -2929,4 +2934,651 @@ test("a blank page inserted inside long code has no empty syntax decorations", a
   await expect(page.locator(".source-page .cm-content").nth(1)).toHaveText(
     "A code comment",
   );
+});
+
+test("typing and deleting on a distant page avoid document-wide geometry reads", async ({
+  page,
+}) => {
+  await setup(
+    page,
+    Array.from(
+      { length: 25 },
+      (_, p) =>
+        `Page ${p}\n` +
+        "A paragraph with enough words for layout and editing.\n".repeat(25),
+    ).join("\f"),
+  );
+  await expect(page.locator(".preview-page")).toHaveCount(25);
+  await page.locator(".source-page .cm-content").last().click();
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__TEST__.paperReads = 0;
+    w.__TEST__.caretReads = 0;
+    const rect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function () {
+      if (this.matches(".source-page")) w.__TEST__.paperReads++;
+      return rect.call(this);
+    };
+    const content = document.querySelector(
+      ".source-page:last-child .cm-content",
+    ) as any;
+    const view = content.cmTile.root.view;
+    const coords = view.coordsAtPos.bind(view);
+    view.coordsAtPos = (...args: any[]) => {
+      w.__TEST__.caretReads++;
+      return coords(...args);
+    };
+  });
+  await page.keyboard.type("some extra words");
+  await page.keyboard.press("Backspace");
+  expect(await page.evaluate(() => (window as any).__TEST__.caretReads)).toBe(
+    0,
+  );
+  // Include the animation frame that follows the last keystroke.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.paperReads),
+  ).toBeLessThan(100);
+});
+
+test("typing during background pagination cancels stale layout and retains the new edit", async ({
+  page,
+}) => {
+  const text = Array.from(
+    { length: 25 },
+    (_, p) =>
+      `Page ${p}\n` +
+      "A paragraph with enough words for layout and editing.\n".repeat(25),
+  ).join("\f");
+  await setup(page, text);
+  await expect(page.locator(".preview-page")).toHaveCount(25);
+  await page.locator(".source-page .cm-content").last().click();
+  await page.evaluate(() => {
+    const content = document.querySelector(
+      ".source-page:last-child .cm-content",
+    ) as any;
+    const view = content.cmTile.root.view;
+    view.dispatch({ selection: { anchor: 0 } });
+    const observer = new MutationObserver((records) => {
+      if (
+        !records.some((record) =>
+          [...record.addedNodes].some(
+            (node) =>
+              node instanceof HTMLElement && node.matches(".source-measure"),
+          ),
+        )
+      )
+        return;
+      observer.disconnect();
+      setTimeout(() => {
+        view.dispatch({ changes: { from: 0, insert: "Resumed typing. " } });
+        (window as any).__TEST__.resumedDuringLayout = true;
+      }, 0);
+    });
+    observer.observe(document.body, { childList: true });
+  });
+  await page.keyboard.type("First edit. ");
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as any).__TEST__.resumedDuringLayout),
+    )
+    .toBe(true);
+  await expect(page.locator(".source-page .cm-content").last()).toContainText(
+    "Resumed typing. First edit. Page 24",
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).__TEST__.snapshot.session.document.text,
+      ),
+    )
+    .toBe(text.replace("Page 24", "Resumed typing. First edit. Page 24"));
+  await expect(page.locator(".source-measure, .measurement-host")).toHaveCount(
+    0,
+  );
+  await expectSourcePageBounds(page);
+  await page.locator("#preview").click();
+  await expect(page.locator(".preview-page").last()).toContainText(
+    "Resumed typing. First edit. Page 24",
+  );
+});
+
+test("sustained deletion does not parse the full document on each keystroke", async ({
+  page,
+}) => {
+  const text = Array.from(
+    { length: 50 },
+    (_, p) =>
+      `Page ${p}\n` +
+      "A paragraph with enough words for layout and editing.\n".repeat(25),
+  ).join("\f");
+  await setup(page, text);
+  await page.locator(".source-page .cm-content").last().click();
+  const parserModule = await page.evaluate(
+    () =>
+      performance
+        .getEntriesByType("resource")
+        .find((entry) =>
+          entry.name.includes("/deps/@codemirror_lang-markdown.js"),
+        )!.name,
+  );
+  const clockStart = new Date("2026-01-01T00:00:00Z");
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
+  const position = await page.evaluate(async (moduleURL) => {
+    const module = await import(moduleURL);
+    const prototype = Object.getPrototypeOf(module.commonmarkLanguage.parser);
+    const createParse = prototype.createParse;
+    const w = window as any;
+    w.__TEST__.largeParses = 0;
+    prototype.createParse = function (input: any, ...args: any[]) {
+      if (input.length > 5000) w.__TEST__.largeParses++;
+      return createParse.call(this, input, ...args);
+    };
+    const content = document.querySelector(
+      ".source-page:last-child .cm-content",
+    ) as any;
+    const view = content.cmTile.root.view;
+    const position = view.state.doc.length - 10;
+    view.dispatch({ selection: { anchor: position } });
+    return textLengthBeforeLastPage() + position;
+    function textLengthBeforeLastPage() {
+      const contents = [
+        ...document.querySelectorAll(".source-page .cm-content"),
+      ].slice(0, -1) as any[];
+      return contents.reduce(
+        (sum, el) => sum + el.cmTile.root.view.state.doc.length + 1,
+        0,
+      );
+    }
+  }, parserModule);
+  for (let i = 0; i < 50; i++) await page.keyboard.press("Backspace");
+  expect(await page.evaluate(() => (window as any).__TEST__.largeParses)).toBe(
+    0,
+  );
+  await page.clock.runFor(250);
+  expect(
+    await page.evaluate(
+      () => (window as any).__TEST__.snapshot.session.document.text,
+    ),
+  ).toBe(text.slice(0, position - 50) + text.slice(position));
+  await page.keyboard.press("Control+z");
+  await page.clock.runFor(250);
+  expect(
+    await page.evaluate(
+      () => (window as any).__TEST__.snapshot.session.document.text,
+    ),
+  ).toBe(text);
+});
+
+for (const prefix of ["- ", "> ", "  - "]) {
+  test(`Backspace removes Markdown prefix ${JSON.stringify(prefix)} and supports undo`, async ({
+    page,
+  }) => {
+    await setup(page, prefix);
+    await page.locator(".source-page .cm-content").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("Backspace");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__TEST__.snapshot.session.document.text,
+        ),
+      )
+      .toBe("");
+    await page.keyboard.press("Control+z");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__TEST__.snapshot.session.document.text,
+        ),
+      )
+      .toBe(prefix);
+  });
+}
+
+for (const key of ["Backspace", "Delete"]) {
+  test(`${key} crosses an automatic page boundary without editing other pages`, async ({
+    page,
+  }) => {
+    const text = paragraphLines(
+      Array.from(
+        { length: 300 },
+        (_, i) => `Line ${i + 1}: ordinary paragraph content.`,
+      ),
+    );
+    await setup(page, text);
+    const boundary = await page
+      .locator(".source-page .cm-content")
+      .evaluateAll((elements, key) => {
+        const views = elements.map((el: any) => el.cmTile.root.view);
+        const view = views[key === "Backspace" ? 1 : 0];
+        view.dispatch({
+          selection: {
+            anchor: key === "Backspace" ? 0 : view.state.doc.length,
+          },
+        });
+        view.focus();
+        const w = window as any;
+        w.__TEST__.unrelatedEdits = 0;
+        for (const other of views.slice(2)) {
+          const dispatch = other.dispatch.bind(other);
+          other.dispatch = (...args: any[]) => {
+            if (args.some((arg) => arg.changes)) w.__TEST__.unrelatedEdits++;
+            return dispatch(...args);
+          };
+        }
+        return views[0].state.doc.length;
+      }, key);
+    const clockStart = new Date("2026-01-01T00:00:00Z");
+    await page.clock.install({ time: clockStart });
+    await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
+    for (let i = 0; i < 5; i++) await page.keyboard.press(key);
+    const from = key === "Backspace" ? boundary - 5 : boundary;
+    const to = key === "Backspace" ? boundary : boundary + 5;
+    await page.clock.runFor(250);
+    expect(
+      await page.evaluate(
+        () => (window as any).__TEST__.snapshot.session.document.text,
+      ),
+    ).toBe(text.slice(0, from) + text.slice(to));
+    expect(
+      await page.evaluate(() => (window as any).__TEST__.unrelatedEdits),
+    ).toBe(0);
+    // Moving to the neighbouring editor starts a separate undo group.
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+z");
+    await page.clock.runFor(250);
+    expect(
+      await page.evaluate(
+        () => (window as any).__TEST__.snapshot.session.document.text,
+      ),
+    ).toBe(text);
+  });
+}
+
+test("Backspace after removing an explicit page break continues in the preceding page", async ({
+  page,
+}) => {
+  await setup(page, "First\fSecond");
+  await page
+    .locator(".source-page .cm-content")
+    .nth(1)
+    .evaluate((el: any) => {
+      const view = el.cmTile.root.view;
+      view.dispatch({ selection: { anchor: 0 } });
+      view.focus();
+    });
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".source-page .cm-content").first()).toBeFocused();
+  await page.keyboard.press("Backspace");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).__TEST__.snapshot.session.document.text,
+      ),
+    )
+    .toBe("FirsSecond");
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).__TEST__.snapshot.session.document.text,
+      ),
+    )
+    .toBe("FirstSecond");
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).__TEST__.snapshot.session.document.text,
+      ),
+    )
+    .toBe("First\fSecond");
+});
+
+test("cached pagination matches a fresh layout after edits, formatting, and font changes", async ({
+  page,
+}) => {
+  await setup(page, "Layout cache test.");
+  const text = paragraphLines(
+    Array.from(
+      { length: 900 },
+      (_, i) =>
+        `Line ${i + 1}: content for a long editing session with some words.`,
+    ),
+  );
+  const result = await page.evaluate(async (text) => {
+    const flowModule = "/src/page-flow.ts",
+      modelModule = "/src/model.ts";
+    const { flowingPages } = await import(flowModule);
+    const { defaults } = await import(modelModule);
+    let measurements = 0;
+    const rect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function () {
+      if (this.matches(".source-measure")) measurements++;
+      return rect.call(this);
+    };
+    function sections(source: string, tag = "p") {
+      return source.split("\f").map((section) =>
+        section
+          .split("\n\n")
+          .map((p) => `<${tag}>${p.replace(/\n/g, "<br>")}</${tag}>`)
+          .join(""),
+      );
+    }
+    async function layout(
+      source: string,
+      prefs = defaults,
+      previous?: any,
+      tag = "p",
+    ) {
+      const host = document.createElement("div");
+      host.className = "measurement-host";
+      document.body.append(host);
+      try {
+        return await flowingPages(
+          source,
+          sections(source, tag),
+          prefs,
+          host,
+          false,
+          async () => true,
+          previous,
+        );
+      } finally {
+        host.remove();
+      }
+    }
+    const previous = await layout(text);
+    const edited = "x" + text;
+    measurements = 0;
+    const cached = await layout(edited, defaults, previous);
+    const cachedMeasures = measurements;
+    measurements = 0;
+    const fresh = await layout(edited);
+    const freshMeasures = measurements;
+    const formatted = await layout(edited, defaults, cached, "blockquote");
+    const freshFormatted = await layout(
+      edited,
+      defaults,
+      undefined,
+      "blockquote",
+    );
+    const changedFont = { ...defaults, font: "Mono", previewFont: "Mono" };
+    measurements = 0;
+    const newFont = await layout(edited, changedFont, cached);
+    const newFontMeasures = measurements;
+    const freshFont = await layout(edited, changedFont);
+    const edits = [];
+    for (const [before, after] of [
+      ["Baseline", "Baseline more"],
+      ["One", ""],
+      ["", "Hello"],
+      ["First\fSecond", "First\fSecond more"],
+      ["First\fSecond", "FirstSecond"],
+      ["First\fSecond", "First\fnew\fSecond"],
+      ["First\f\fThird", "First\fnew\fThird"],
+    ]) {
+      const base = await layout(before);
+      edits.push([await layout(after, defaults, base), await layout(after)]);
+    }
+    return {
+      edits,
+      cached,
+      fresh,
+      cachedMeasures,
+      freshMeasures,
+      formatted,
+      freshFormatted,
+      newFont,
+      freshFont,
+      newFontMeasures,
+    };
+  }, text);
+  for (const [cached, fresh] of result.edits) expect(cached).toEqual(fresh);
+  expect(result.cached).toEqual(result.fresh);
+  expect(result.cachedMeasures).toBeLessThan(result.freshMeasures / 3);
+  expect(result.formatted).toEqual(result.freshFormatted);
+  expect(result.newFont).toEqual(result.freshFont);
+  expect(result.newFontMeasures).toBeGreaterThan(result.cachedMeasures);
+});
+
+test("repeated edit and idle cycles leave hidden preview untouched and refresh it when opened", async ({
+  page,
+}) => {
+  const text = paragraphLines(
+    Array.from(
+      { length: 300 },
+      (_, i) => `Line ${i + 1}: content for a longer editing session.`,
+    ),
+  );
+  await setup(page, text);
+  await page.locator(".source-page .cm-content").first().click();
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__TEST__.previewRebuilds = 0;
+    const view = (document.querySelector(".source-page .cm-content") as any)
+      .cmTile.root.view;
+    view.dispatch({ selection: { anchor: 0 } });
+    view.focus();
+    new MutationObserver(
+      (records) =>
+        (w.__TEST__.previewRebuilds += records.filter(
+          (r) => r.addedNodes.length || r.removedNodes.length,
+        ).length),
+    ).observe(document.querySelector("#preview-host")!, {
+      childList: true,
+      subtree: true,
+    });
+  });
+  const words = text.trim().split(/\s+/).length;
+  for (let cycle = 1; cycle <= 4; cycle++) {
+    await page.keyboard.type("word ");
+    await expect(page.locator("#word-count")).toHaveText(
+      `${(words + cycle).toLocaleString("en-US")} words`,
+    );
+    expect(
+      await page.evaluate(() => (window as any).__TEST__.previewRebuilds),
+    ).toBe(0);
+    await expect(page.locator(".source-measure,.measurement-host")).toHaveCount(
+      0,
+    );
+  }
+  await expectSourcePageBounds(page);
+  await page.locator("#preview").click();
+  await expect(page.locator("#preview-host .page-body").first()).toContainText(
+    "word word word word Line 1",
+  );
+  await expectPreviewPageBounds(page);
+});
+
+test("moving the cursor within a page avoids edge probes, sidebar rebuilds, and rapid checkpoints", async ({
+  page,
+}) => {
+  await setup(
+    page,
+    paragraphLines(
+      Array.from(
+        { length: 300 },
+        (_, i) => `Line ${i + 1}: content for cursor movement testing.`,
+      ),
+    ),
+  );
+  await page.locator(".source-page .cm-content").first().click();
+  const clockStart = new Date("2026-01-01T00:00:00Z");
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
+  await page.evaluate(() => {
+    const view = (document.querySelector(".source-page .cm-content") as any)
+      .cmTile.root.view;
+    view.dispatch({ selection: { anchor: view.state.doc.line(6).from + 15 } });
+    view.focus();
+  });
+  await page.clock.runFor(1000);
+  const before = await page.evaluate(() => {
+    const w = window as any;
+    w.__TEST__.cursorProbes = 0;
+    w.__TEST__.sidebarUpdates = 0;
+    const view = (document.querySelector(".source-page .cm-content") as any)
+      .cmTile.root.view;
+    const coords = view.coordsAtPos.bind(view);
+    view.coordsAtPos = (...args: any[]) => {
+      if (args[0] === 0 || args[0] === view.state.doc.length)
+        w.__TEST__.cursorProbes++;
+      return coords(...args);
+    };
+    new MutationObserver(
+      (records) => (w.__TEST__.sidebarUpdates += records.length),
+    ).observe(document.querySelector("#thumbnails")!, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+    return w.__TEST__.checkpoints.length;
+  });
+  for (const key of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"])
+    for (let i = 0; i < 3; i++) await page.keyboard.press(key);
+  await page.clock.runFor(300);
+  expect(await page.evaluate(() => (window as any).__TEST__.cursorProbes)).toBe(
+    0,
+  );
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.sidebarUpdates),
+  ).toBe(0);
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.checkpoints.length),
+  ).toBe(before);
+  await page.clock.runFor(1000);
+  expect(
+    await page.evaluate(() => (window as any).__TEST__.checkpoints.length),
+  ).toBe(before + 1);
+});
+
+test("cursor movement does not postpone recovery of newly typed text", async ({
+  page,
+}) => {
+  const text = "Cursor navigation text!";
+  await setup(page, text.slice(0, -1));
+  const clockStart = new Date("2026-01-01T00:00:00Z");
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
+  await page.keyboard.press("Control+End");
+  await page.clock.runFor(1000);
+  await page.keyboard.type("!");
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press("ArrowLeft");
+    await page.clock.runFor(50);
+  }
+  expect(
+    await page.evaluate(
+      () => (window as any).__TEST__.snapshot.session.document.text,
+    ),
+  ).toBe(text);
+  await page.clock.runFor(1000);
+  expect(
+    await page.evaluate(
+      () => (window as any).__TEST__.snapshot.session.document.cursor,
+    ),
+  ).toBe(text.length - 4);
+});
+
+for (const key of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) {
+  test(`${key} moves the caret across pages and updates the current-page marker`, async ({
+    page,
+  }) => {
+    const first = "First line\nLast line",
+      second = "Next first\nNext last";
+    await setup(page, first + "\f" + second);
+    const backwards = key === "ArrowLeft" || key === "ArrowUp";
+    await page
+      .locator(".source-page .cm-content")
+      .nth(backwards ? 1 : 0)
+      .evaluate((el: any, key) => {
+        const view = el.cmTile.root.view;
+        const anchor =
+          key === "ArrowLeft"
+            ? 0
+            : key === "ArrowRight"
+              ? view.state.doc.length
+              : key === "ArrowUp"
+                ? 3
+                : view.state.doc.line(2).from + 3;
+        view.dispatch({ selection: { anchor } });
+        view.focus();
+      }, key);
+    await page.keyboard.press(key);
+    const target = page
+      .locator(".source-page .cm-content")
+      .nth(backwards ? 0 : 1);
+    await expect(target).toBeFocused();
+    const expected =
+      key === "ArrowLeft"
+        ? first.length
+        : key === "ArrowRight"
+          ? 0
+          : key === "ArrowUp"
+            ? first.indexOf("Last line") + 3
+            : 3;
+    expect(
+      await target.evaluate(
+        (el: any) => el.cmTile.root.view.state.selection.main.head,
+      ),
+    ).toBe(expected);
+    await expect(
+      page.locator(".thumbnail").nth(backwards ? 0 : 1),
+    ).toHaveAttribute("aria-current", "page");
+  });
+}
+
+test("cursor movement with Find open reuses search matches", async ({
+  page,
+}) => {
+  await setup(
+    page,
+    paragraphLines(
+      Array.from(
+        { length: 300 },
+        (_, i) => `Line ${i + 1}: searchable document text.`,
+      ),
+    ),
+  );
+  await page.locator("#find").click();
+  await page.getByPlaceholder("Find in document").fill("Line");
+  await expect(page.locator(".find-results")).toHaveText("1 of 300");
+  await page
+    .locator(".source-page .cm-content")
+    .first()
+    .evaluate((el: any) => {
+      const view = el.cmTile.root.view;
+      view.dispatch({ selection: { anchor: 5 } });
+      view.focus();
+    });
+  await page.evaluate(async () => {
+    const moduleURL = performance
+      .getEntriesByType("resource")
+      .find((entry) =>
+        entry.name.includes("/deps/@codemirror_search.js"),
+      )!.name;
+    const module = await import(moduleURL);
+    const cursor = module.SearchQuery.prototype.getCursor;
+    const w = window as any;
+    w.__TEST__.searchScans = 0;
+    module.SearchQuery.prototype.getCursor = function (...args: any[]) {
+      w.__TEST__.searchScans++;
+      return cursor.apply(this, args);
+    };
+  });
+  for (const key of ["ArrowRight", "ArrowLeft"])
+    for (let i = 0; i < 10; i++) await page.keyboard.press(key);
+  expect(await page.evaluate(() => (window as any).__TEST__.searchScans)).toBe(
+    0,
+  );
+  await page.getByRole("button", { name: "Next match", exact: true }).click();
+  await expect(page.locator(".find-results")).toHaveText("2 of 300");
 });

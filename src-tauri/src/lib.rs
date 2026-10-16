@@ -282,24 +282,29 @@ async fn pick_image(
     image_markdown(&path, &document).map(Some)
 }
 #[tauri::command]
-fn checkpoint(
+async fn checkpoint(
     text: String,
     cursor: usize,
     bookmarks: Vec<Bookmark>,
     page_starts: Option<Vec<usize>>,
     page_layout_version: Option<u32>,
     preferences: serde_json::Value,
-    state: State<Writer>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut writer = lock(&state)?;
-    writer.session.document.text = text;
-    writer.session.document.cursor = cursor;
-    writer.session.document.bookmarks = bookmarks;
-    writer.session.document.page_starts = page_starts.unwrap_or_default();
-    writer.session.document.page_layout_version = page_layout_version.unwrap_or_default();
-    writer.session.preferences = preferences;
-    writer.keep_navigation();
-    writer.persist()
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Writer>();
+        let mut writer = lock(&state)?;
+        writer.session.document.text = text;
+        writer.session.document.cursor = cursor;
+        writer.session.document.bookmarks = bookmarks;
+        writer.session.document.page_starts = page_starts.unwrap_or_default();
+        writer.session.document.page_layout_version = page_layout_version.unwrap_or_default();
+        writer.session.preferences = preferences;
+        writer.keep_navigation();
+        writer.persist()
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 #[tauri::command]
 fn new_document(state: State<Writer>) -> Result<Snapshot, String> {

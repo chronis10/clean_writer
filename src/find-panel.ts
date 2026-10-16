@@ -15,19 +15,33 @@ export function findPanel(view: EditorView): Panel {
   const input = dom.querySelector<HTMLInputElement>("input")!;
   const caseButton = dom.querySelector<HTMLButtonElement>(".match-case")!;
   const count = dom.querySelector<HTMLElement>(".find-results")!;
+  let countedDoc: typeof view.state.doc | undefined;
+  let countedQuery: SearchQuery | undefined;
+  let matches: { from: number; to: number }[] = [];
   function refresh() {
     const query = getSearchQuery(view.state);
     if (input.value !== query.search) input.value = query.search;
     caseButton.setAttribute("aria-pressed", String(query.caseSensitive));
-    const cursor = query.getCursor(view.state.doc);
-    let total = 0,
-      active = 0;
-    if (query.valid) {
-      for (let next = cursor.next(); !next.done; next = cursor.next()) {
-        total++;
-        if (next.value.from === view.state.selection.main.from) active = total;
+    if (countedDoc !== view.state.doc || !countedQuery?.eq(query)) {
+      countedDoc = view.state.doc;
+      countedQuery = query;
+      matches = [];
+      if (query.valid) {
+        const cursor = query.getCursor(view.state.doc);
+        for (let next = cursor.next(); !next.done; next = cursor.next())
+          matches.push({ from: next.value.from, to: next.value.to });
       }
     }
+    const total = matches.length;
+    let low = 0,
+      high = total;
+    const from = view.state.selection.main.from;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (matches[middle].from < from) low = middle + 1;
+      else high = middle;
+    }
+    const active = matches[low]?.from === from ? low + 1 : 0;
     count.textContent = !query.search
       ? ""
       : total

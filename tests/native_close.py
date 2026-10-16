@@ -127,13 +127,22 @@ with tempfile.TemporaryDirectory(prefix='clean-writer-native-close-', ignore_cle
         return result
     def script(code):
         return request('POST', f'/session/{session}/execute/sync', {'script':code, 'args':[]})
+    def observe_render_completion():
+        # Hidden preview pages are refreshed on demand. Observe the actual
+        # background layout rather than treating stale hidden DOM as ready.
+        script("window.__nativeRenderDone=false;let started=false;const observer=new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes].some(n=>n instanceof HTMLElement&&n.matches('.measurement-host'))))started=true;if(started&&!document.querySelector('.measurement-host')){window.__nativeRenderDone=true;observer.disconnect();}});observer.observe(document.body,{childList:true});")
     def click(selector):
+        opening_preview = selector == '#preview' and script("return document.querySelector('#preview').getAttribute('aria-pressed')==='false'")
+        if opening_preview:
+            observe_render_completion()
         # Thumbnail DOM can refresh between WebDriver lookup and click.
         for attempt in range(10):
             try:
                 element = request('POST', f'/session/{session}/element', {'using':'css selector','value':selector})
                 element_id = element['element-6066-11e4-a52e-4f735466cecf']
                 request('POST', f'/session/{session}/element/{element_id}/click', {})
+                if opening_preview:
+                    wait_for(lambda: script('return window.__nativeRenderDone'))
                 return
             except urllib.error.HTTPError as error:
                 if error.code != 404 or attempt == 9:
@@ -174,7 +183,9 @@ with tempfile.TemporaryDirectory(prefix='clean-writer-native-close-', ignore_cle
             # Fixture replacement targets the document coordinator; Ctrl+A in
             # a visible independent page intentionally selects only that page.
             script("const view=document.querySelector('#document-state .cm-content').cmTile.root.view;view.dispatch({changes:{from:0,to:view.state.doc.length,insert:" + json.dumps(text) + "},selection:{anchor:0}});")
+            observe_render_completion()
             wait_for(lambda: recovered_text() == text)
+            wait_for(lambda: script('return window.__nativeRenderDone'))
         def point_for(row):
             code = "const el=[...document.querySelectorAll('.cm-line')].find(el=>el.textContent.startsWith('Line " + str(row) + ":')); if (!el) return null; el.scrollIntoView({block:'center'}); const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT); const n=walker.nextNode(); const r=document.createRange(); r.setStart(n,12); r.setEnd(n,13); const rect=r.getBoundingClientRect(); return {x:rect.left+.5,y:(rect.top+rect.bottom)/2};"
             return wait_for(lambda: script(code))
@@ -245,7 +256,7 @@ with tempfile.TemporaryDirectory(prefix='clean-writer-native-close-', ignore_cle
                 print(f'Native caret and insertion agree: {zoom}% zoom, line {row}, display scale {options.display_scale}', flush=True)
         reading_text = 'Reading content.\n'*100
         replace_text('\f'.join([reading_text]*3))
-        wait_for(lambda: script("return document.querySelectorAll('.preview-page').length===document.querySelectorAll('.source-page').length && document.querySelectorAll('.source-page').length>3"))
+        wait_for(lambda: script("return document.querySelectorAll('.source-page').length>3"))
         reading_count = script("return document.querySelectorAll('.source-page').length")
         click('.source-page:nth-child(3) .cm-content')
         position=script("const p=document.querySelectorAll('.source-page')[2],canvas=document.querySelector('#canvas');p.scrollIntoView({block:'start'});canvas.scrollTop+=60;return canvas.scrollTop")
@@ -271,7 +282,7 @@ with tempfile.TemporaryDirectory(prefix='clean-writer-native-close-', ignore_cle
         long_code = '\n'.join(f'command --line {i}' for i in range(120))+'\n'
         long_table = '| A | B |\n| - | - |\n'+'\n'.join(f'| row{i} | value{i} |' for i in range(90))
         replace_text('```bash\n'+long_code+'```\f'+long_table)
-        wait_for(lambda: script("return document.querySelectorAll('.preview-page').length===document.querySelectorAll('.source-page').length && document.querySelectorAll('.source-page').length>5"))
+        wait_for(lambda: script("return document.querySelectorAll('.source-page').length>5"))
         click('#preview')
         assert script("return [...document.querySelectorAll('.preview-page pre code')].map(el=>el.textContent).join('')==="+json.dumps(long_code))
         assert script("return document.querySelectorAll('.preview-page pre code').length>1 && document.querySelectorAll('.preview-page table').length>1")
@@ -367,7 +378,6 @@ with tempfile.TemporaryDirectory(prefix='clean-writer-native-close-', ignore_cle
         replace_text(markdown)
         script("const el=document.querySelector('#zoom'); el.value=130; el.dispatchEvent(new Event('input'));")
         time.sleep(.5)
-        wait_for(lambda: script("return document.querySelectorAll('.preview-page').length===document.querySelectorAll('.source-page').length"))
         count = script("return document.querySelectorAll('.thumbnail').length")
         assert count > 5, count
         def visible_thumbnail(index):
